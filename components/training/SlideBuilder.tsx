@@ -26,6 +26,8 @@ export type Slide = {
 type SlideBuilderProps = {
   slides: Slide[];
   setSlides: Dispatch<SetStateAction<Slide[]>>;
+  selectedSlideId: number;
+  setSelectedSlideId: Dispatch<SetStateAction<number>>;
 };
 
 type SortableSlideButtonProps = {
@@ -41,8 +43,14 @@ function SortableSlideButton({
   isSelected,
   onSelect,
 }: SortableSlideButtonProps) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: slide.id });
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: slide.id });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -54,10 +62,12 @@ function SortableSlideButton({
     : 0;
 
   return (
-    <div ref={setNodeRef} style={style} className={isDragging ? "opacity-60" : ""}>
-      <button
-        type="button"
-        onClick={onSelect}
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`${isDragging ? "opacity-60" : ""}`}
+    >
+      <div
         className={`w-full rounded-lg border px-3 py-3 text-left text-sm transition ${
           isSelected
             ? "border-blue-600 bg-blue-50 text-blue-700"
@@ -65,18 +75,32 @@ function SortableSlideButton({
         }`}
       >
         <div className="flex items-start gap-3">
-          <span
+          <button
+            type="button"
             {...attributes}
             {...listeners}
             className={`mt-0.5 flex h-7 w-7 shrink-0 cursor-grab items-center justify-center rounded-full text-xs font-bold active:cursor-grabbing ${
-              isSelected ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-500"
+              isSelected
+                ? "bg-blue-600 text-white"
+                : "bg-slate-100 text-slate-500"
             }`}
             title="Drag to reorder"
+            aria-label="Drag to reorder slide"
           >
             ☰
-          </span>
+          </button>
 
-          <div className="min-w-0 flex-1">
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={onSelect}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                onSelect();
+              }
+            }}
+            className="min-w-0 flex-1 cursor-pointer rounded-md"
+          >
             <p className="truncate font-semibold">
               {index + 1}. {slide.title || "Untitled Slide"}
             </p>
@@ -90,7 +114,7 @@ function SortableSlideButton({
             </p>
           </div>
         </div>
-      </button>
+      </div>
     </div>
   );
 }
@@ -98,8 +122,10 @@ function SortableSlideButton({
 export default function SlideBuilder({
   slides,
   setSlides,
+  selectedSlideId,
+  setSelectedSlideId,
 }: SlideBuilderProps) {
-  const [selectedSlideId, setSelectedSlideId] = useState(1);
+  const [isOutlineCollapsed, setIsOutlineCollapsed] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -144,7 +170,9 @@ export default function SlideBuilder({
     setSlides(updatedSlides);
 
     if (selectedSlideId === id) {
-      const nextSlide = updatedSlides[slideIndex] ?? updatedSlides[slideIndex - 1];
+      const nextSlide =
+        updatedSlides[slideIndex] ?? updatedSlides[slideIndex - 1];
+
       setSelectedSlideId(nextSlide.id);
     }
   }
@@ -200,34 +228,86 @@ export default function SlideBuilder({
         </button>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[280px_1fr]">
-        <aside className="rounded-xl border border-slate-200 bg-white p-3">
-          <p className="mb-3 px-2 text-xs font-bold uppercase tracking-wide text-slate-400">
-            Course Outline
-          </p>
-
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
+      <div
+        className={`grid gap-5 transition-all duration-300 ${
+          isOutlineCollapsed
+            ? "lg:grid-cols-[44px_1fr]"
+            : "lg:grid-cols-[280px_1fr]"
+        }`}
+      >
+        <aside className="overflow-hidden rounded-xl border border-slate-200 bg-white transition-all duration-300">
+          <div
+            className={`flex items-center border-b border-slate-200 p-3 ${
+              isOutlineCollapsed ? "justify-center" : "justify-between"
+            }`}
           >
-            <SortableContext
-              items={slides.map((slide) => slide.id)}
-              strategy={verticalListSortingStrategy}
+            {!isOutlineCollapsed && (
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                Course Outline
+              </p>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setIsOutlineCollapsed(!isOutlineCollapsed)}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+              title={
+                isOutlineCollapsed
+                  ? "Expand course outline"
+                  : "Collapse course outline"
+              }
             >
-              <div className="space-y-2">
-                {slides.map((slide, index) => (
-                  <SortableSlideButton
-                    key={slide.id}
-                    slide={slide}
-                    index={index}
-                    isSelected={slide.id === selectedSlideId}
-                    onSelect={() => setSelectedSlideId(slide.id)}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
+              {isOutlineCollapsed ? "▶" : "◀"}
+            </button>
+          </div>
+
+          {isOutlineCollapsed && (
+  <div className="flex flex-col items-center gap-2 p-2">
+    {slides.map((slide, index) => (
+      <button
+        key={slide.id}
+        type="button"
+        onClick={() => setSelectedSlideId(slide.id)}
+        className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition ${
+          slide.id === selectedSlideId
+            ? "bg-blue-600 text-white"
+            : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+        }`}
+        title={slide.title || `Slide ${index + 1}`}
+      >
+        {index + 1}
+      </button>
+    ))}
+  </div>
+)}
+
+          {!isOutlineCollapsed && (
+            <div className="p-3">
+              <DndContext
+                id="slide-builder-dnd"
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={slides.map((slide) => slide.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <div className="space-y-2">
+                    {slides.map((slide, index) => (
+                      <SortableSlideButton
+                        key={slide.id}
+                        slide={slide}
+                        index={index}
+                        isSelected={slide.id === selectedSlideId}
+                        onSelect={() => setSelectedSlideId(slide.id)}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
+            </div>
+          )}
         </aside>
 
         <section className="rounded-xl border border-slate-200 bg-white p-5">

@@ -253,10 +253,11 @@ export default function QuizBuilder() {
           </p>
 
           <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
+  id="quiz-builder-dnd"
+  sensors={sensors}
+  collisionDetection={closestCenter}
+  onDragEnd={handleDragEnd}
+>
             <SortableContext
               items={questions.map((question) => question.id)}
               strategy={verticalListSortingStrategy}

@@ -16,6 +16,9 @@ export default function NewTrainingPage() {
       body: "",
     },
   ]);
+  const [selectedSlideId, setSelectedSlideId] = useState(1);
+
+  
 
   return (
     <AdminLayout
@@ -106,7 +109,13 @@ export default function NewTrainingPage() {
 
           <div className="grid gap-6 xl:grid-cols-[1fr_420px]">
             <div className="space-y-6">
-              <SlideBuilder slides={slides} setSlides={setSlides} />
+
+            <SlideBuilder
+  slides={slides}
+  setSlides={setSlides}
+  selectedSlideId={selectedSlideId}
+  setSelectedSlideId={setSelectedSlideId}
+/>
 
               <QuizBuilder />
             </div>
@@ -121,10 +130,16 @@ export default function NewTrainingPage() {
                 </p>
               </div>
 
+
+                <p className="mb-2 text-xs text-slate-400">
+  Selected slide ID: {selectedSlideId}
+</p>
               <TrainingViewer
-                title={trainingTitle || "Untitled Training"}
-                slides={slides}
-              />
+  key={selectedSlideId}
+  title={trainingTitle || "Untitled Training"}
+  slides={slides}
+  selectedSlideId={selectedSlideId}
+/>
             </div>
           </div>
 
