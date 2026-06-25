@@ -1,13 +1,28 @@
+"use client";
+
+import { useState } from "react";
 import AdminLayout from "@/components/layout/AdminLayout";
-import SlideBuilder from "@/components/training/SlideBuilder";
+import SlideBuilder, { Slide } from "@/components/training/SlideBuilder";
+import QuizBuilder from "@/components/training/QuizBuilder";
+import TrainingViewer from "@/components/training/TrainingViewer";
 
 export default function NewTrainingPage() {
+  const [trainingTitle, setTrainingTitle] = useState("");
+
+  const [slides, setSlides] = useState<Slide[]>([
+    {
+      id: 1,
+      title: "",
+      body: "",
+    },
+  ]);
+
   return (
     <AdminLayout
       title="Add Training"
       description="Create a new employee training module."
     >
-      <div className="max-w-4xl rounded-xl bg-white p-6 shadow-sm">
+      <div className="rounded-xl bg-white p-6 shadow-sm">
         <div className="border-b border-slate-200 pb-5">
           <h2 className="text-lg font-bold text-slate-900">
             Training Information
@@ -24,6 +39,8 @@ export default function NewTrainingPage() {
             </label>
             <input
               type="text"
+              value={trainingTitle}
+              onChange={(event) => setTrainingTitle(event.target.value)}
               placeholder="Example: Hospitality 101"
               className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
             />
@@ -87,8 +104,29 @@ export default function NewTrainingPage() {
             </div>
           </div>
 
-          <SlideBuilder />
-          
+          <div className="grid gap-6 xl:grid-cols-[1fr_420px]">
+            <div className="space-y-6">
+              <SlideBuilder slides={slides} setSlides={setSlides} />
+
+              <QuizBuilder />
+            </div>
+
+            <div className="xl:sticky xl:top-6 xl:self-start">
+              <div className="mb-3">
+                <p className="text-sm font-bold text-slate-900">
+                  Live Preview
+                </p>
+                <p className="text-sm text-slate-500">
+                  This is what employees will see.
+                </p>
+              </div>
+
+              <TrainingViewer
+                title={trainingTitle || "Untitled Training"}
+                slides={slides}
+              />
+            </div>
+          </div>
 
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
             <h3 className="font-bold text-slate-900">Retake Rules</h3>
@@ -133,6 +171,13 @@ export default function NewTrainingPage() {
               className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
               Cancel
+            </a>
+
+            <a
+              href="/training/preview"
+              className="rounded-lg border border-blue-600 px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50"
+            >
+              Preview
             </a>
 
             <button
