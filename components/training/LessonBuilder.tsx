@@ -21,13 +21,15 @@ export type Slide = {
   id: number;
   title: string;
   body: string;
+  isComplete: boolean;
 };
 
 type SlideBuilderProps = {
   slides: Slide[];
   setSlides: Dispatch<SetStateAction<Slide[]>>;
   selectedSlideId: number;
-  setSelectedSlideId: Dispatch<SetStateAction<number>>;
+  setSelectedSlideId: (id: number) => void;
+  onFocusBuilder?: () => void;
 };
 
 type SortableSlideButtonProps = {
@@ -109,9 +111,21 @@ function SortableSlideButton({
               {slide.body || "No content added yet."}
             </p>
 
-            <p className="mt-2 text-xs text-slate-400">
-              {wordCount} {wordCount === 1 ? "word" : "words"}
-            </p>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <p className="text-xs text-slate-400">
+                {wordCount} {wordCount === 1 ? "word" : "words"}
+              </p>
+
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                  slide.isComplete
+                    ? "bg-green-100 text-green-700"
+                    : "bg-amber-100 text-amber-700"
+                }`}
+              >
+                {slide.isComplete ? "Ready" : "Incomplete"}
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -124,6 +138,7 @@ export default function SlideBuilder({
   setSlides,
   selectedSlideId,
   setSelectedSlideId,
+  onFocusBuilder,
 }: SlideBuilderProps) {
   const [isOutlineCollapsed, setIsOutlineCollapsed] = useState(false);
 
@@ -143,10 +158,11 @@ export default function SlideBuilder({
   );
 
   function addSlide() {
-    const newSlide = {
+    const newSlide: Slide = {
       id: Date.now(),
       title: "",
       body: "",
+      isComplete: false,
     };
 
     setSlides([...slides, newSlide]);
@@ -157,6 +173,16 @@ export default function SlideBuilder({
     setSlides(
       slides.map((slide) =>
         slide.id === id ? { ...slide, [field]: value } : slide
+      )
+    );
+  }
+
+  function toggleSlideComplete(id: number) {
+    setSlides(
+      slides.map((slide) =>
+        slide.id === id
+          ? { ...slide, isComplete: !slide.isComplete }
+          : slide
       )
     );
   }
@@ -187,6 +213,7 @@ export default function SlideBuilder({
       title: slideToCopy.title
         ? `${slideToCopy.title} Copy`
         : "Untitled Slide Copy",
+      isComplete: false,
     };
 
     const slideIndex = slides.findIndex((slide) => slide.id === id);
@@ -210,7 +237,11 @@ export default function SlideBuilder({
   }
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+    <div
+  onPointerDown={onFocusBuilder}
+  onFocusCapture={onFocusBuilder}
+  className="rounded-xl border border-slate-200 bg-slate-50 p-5"
+>
       <div className="mb-5 flex items-center justify-between">
         <div>
           <h3 className="font-bold text-slate-900">Training Slides</h3>
@@ -262,24 +293,40 @@ export default function SlideBuilder({
           </div>
 
           {isOutlineCollapsed && (
-  <div className="flex flex-col items-center gap-2 p-2">
-    {slides.map((slide, index) => (
-      <button
-        key={slide.id}
-        type="button"
-        onClick={() => setSelectedSlideId(slide.id)}
-        className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition ${
-          slide.id === selectedSlideId
-            ? "bg-blue-600 text-white"
-            : "bg-slate-100 text-slate-500 hover:bg-slate-200"
-        }`}
-        title={slide.title || `Slide ${index + 1}`}
-      >
-        {index + 1}
-      </button>
-    ))}
-  </div>
-)}
+            <div className="flex flex-col items-center gap-2 p-2">
+              {slides.map((slide, index) => (
+                <button
+                  key={slide.id}
+                  type="button"
+                  onClick={() => setSelectedSlideId(slide.id)}
+                  className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition ${
+                    slide.id === selectedSlideId
+                      ? "bg-blue-600 text-white"
+                      : slide.isComplete
+                      ? "bg-green-100 text-green-700 hover:bg-green-200"
+                      : "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                  }`}
+                  title={`${slide.title || `Slide ${index + 1}`} - ${
+                    slide.isComplete ? "Ready" : "Incomplete"
+                  }`}
+                >
+                  <div className="relative flex h-8 w-8 items-center justify-center">
+                    <span>{index + 1}</span>
+
+                    <span
+                      className={`absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${
+                        slide.isComplete
+                          ? "bg-green-600 text-white"
+                          : "bg-amber-500 text-white"
+                      }`}
+                    >
+                      {slide.isComplete ? "✓" : "!"}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
 
           {!isOutlineCollapsed && (
             <div className="p-3">
@@ -322,6 +369,20 @@ export default function SlideBuilder({
             </div>
 
             <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => toggleSlideComplete(selectedSlide.id)}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                  selectedSlide.isComplete
+                    ? "border-green-300 bg-green-50 text-green-700 hover:bg-green-100"
+                    : "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                }`}
+              >
+                {selectedSlide.isComplete
+                  ? "Mark Incomplete"
+                  : "Mark Complete"}
+              </button>
+
               <button
                 type="button"
                 onClick={() => duplicateSlide(selectedSlide.id)}

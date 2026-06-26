@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import AdminLayout from "@/components/layout/AdminLayout";
-import SlideBuilder, { Slide } from "@/components/training/SlideBuilder";
-import QuizBuilder from "@/components/training/QuizBuilder";
-import TrainingViewer from "@/components/training/TrainingViewer";
+import SlideBuilder, { Slide } from "@/components/training/LessonBuilder";
+import TrainingViewer from "@/components/training/LessonViewer";
+import QuizBuilder, { QuizQuestion } from "@/components/training/QuizBuilder";
+import QuizViewer from "@/components/training/QuizViewer";
 
 export default function NewTrainingPage() {
   const [trainingTitle, setTrainingTitle] = useState("");
@@ -14,134 +15,142 @@ export default function NewTrainingPage() {
       id: 1,
       title: "",
       body: "",
+      isComplete: false,
     },
   ]);
+
   const [selectedSlideId, setSelectedSlideId] = useState(1);
 
-  
+  const [questions, setQuestions] = useState<QuizQuestion[]>([
+  {
+    id: 1,
+    question: "",
+    answers: ["", "", "", ""],
+    correctAnswerIndex: 0,
+    isComplete: false,
+  },
+]);
+
+const [selectedQuestionId, setSelectedQuestionId] = useState(1);
+
+const [activePreview, setActivePreview] = useState<"lesson" | "quiz">("lesson");
+
+const selectedQuestion =
+  questions.find((question) => question.id === selectedQuestionId) ??
+  questions[0];
 
   return (
     <AdminLayout
       title="Add Training"
       description="Create a new employee training module."
     >
-      <div className="rounded-xl bg-white p-6 shadow-sm">
-        <div className="border-b border-slate-200 pb-5">
-          <h2 className="text-lg font-bold text-slate-900">
-            Training Information
-          </h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Basic details employees and managers will see.
-          </p>
-        </div>
-
-        <form className="mt-6 space-y-6">
-          <div>
-            <label className="block text-sm font-semibold text-slate-700">
-              Training Title
-            </label>
-            <input
-              type="text"
-              value={trainingTitle}
-              onChange={(event) => setTrainingTitle(event.target.value)}
-              placeholder="Example: Hospitality 101"
-              className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
-            />
-          </div>
-
-          <div>
-            <label className="block text-sm font-semibold text-slate-700">
-              Description
-            </label>
-            <textarea
-              placeholder="Briefly describe what this training covers..."
-              rows={4}
-              className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
-            />
-          </div>
-
-          <div className="grid gap-6 md:grid-cols-2">
-            <div>
-              <label className="block text-sm font-semibold text-slate-700">
-                Category
-              </label>
-              <input
-                type="text"
-                placeholder="Customer Service"
-                className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
-              />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_520px] 2xl:grid-cols-[minmax(0,1fr)_560px]">
+        <div className="space-y-6">
+          <div className="rounded-xl bg-white p-6 shadow-sm">
+            <div className="border-b border-slate-200 pb-5">
+              <h2 className="text-lg font-bold text-slate-900">
+                Training Information
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Basic details employees and managers will see.
+              </p>
             </div>
 
-            <div>
-              <label className="block text-sm font-semibold text-slate-700">
-                Estimated Minutes
-              </label>
-              <input
-                type="number"
-                placeholder="15"
-                className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
-              />
-            </div>
+            <form className="mt-6 space-y-6">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700">
+                  Training Title
+                </label>
+                <input
+                  type="text"
+                  value={trainingTitle}
+                  onChange={(event) => setTrainingTitle(event.target.value)}
+                  placeholder="Example: Hospitality 101"
+                  className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700">
+                  Description
+                </label>
+                <textarea
+                  placeholder="Briefly describe what this training covers..."
+                  rows={4}
+                  className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+                />
+              </div>
+
+              <div className="grid gap-6 md:grid-cols-2">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Category
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Customer Service"
+                    className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Estimated Minutes
+                  </label>
+                  <input
+                    type="number"
+                    placeholder="15"
+                    className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-6 md:grid-cols-2">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Audience
+                  </label>
+                  <select className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600">
+                    <option value="all">All Employees</option>
+                    <option value="position_specific">Position Specific</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Passing Score
+                  </label>
+                  <input
+                    type="number"
+                    placeholder="80"
+                    className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+                  />
+                </div>
+              </div>
+            </form>
           </div>
 
-          <div className="grid gap-6 md:grid-cols-2">
-            <div>
-              <label className="block text-sm font-semibold text-slate-700">
-                Audience
-              </label>
-              <select className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600">
-                <option value="all">All Employees</option>
-                <option value="position_specific">Position Specific</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-semibold text-slate-700">
-                Passing Score
-              </label>
-              <input
-                type="number"
-                placeholder="80"
-                className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
-              />
-            </div>
-          </div>
-
-          <div className="grid gap-6 xl:grid-cols-[1fr_420px]">
-            <div className="space-y-6">
-
-            <SlideBuilder
+          <SlideBuilder
   slides={slides}
   setSlides={setSlides}
   selectedSlideId={selectedSlideId}
-  setSelectedSlideId={setSelectedSlideId}
+  setSelectedSlideId={(id) => {
+    setSelectedSlideId(id);
+    setActivePreview("lesson");
+  }}
+  onFocusBuilder={() => setActivePreview("lesson")}
 />
 
-              <QuizBuilder />
-            </div>
-
-            <div className="xl:sticky xl:top-6 xl:self-start">
-              <div className="mb-3">
-                <p className="text-sm font-bold text-slate-900">
-                  Live Preview
-                </p>
-                <p className="text-sm text-slate-500">
-                  This is what employees will see.
-                </p>
-              </div>
-
-
-                <p className="mb-2 text-xs text-slate-400">
-  Selected slide ID: {selectedSlideId}
-</p>
-              <TrainingViewer
-  key={selectedSlideId}
-  title={trainingTitle || "Untitled Training"}
-  slides={slides}
-  selectedSlideId={selectedSlideId}
+          <QuizBuilder
+  questions={questions}
+  setQuestions={setQuestions}
+  selectedQuestionId={selectedQuestionId}
+  setSelectedQuestionId={(id) => {
+    setSelectedQuestionId(id);
+    setActivePreview("quiz");
+  }}
+  onFocusBuilder={() => setActivePreview("quiz")}
 />
-            </div>
-          </div>
 
           <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
             <h3 className="font-bold text-slate-900">Retake Rules</h3>
@@ -209,7 +218,61 @@ export default function NewTrainingPage() {
               Publish
             </button>
           </div>
-        </form>
+        </div>
+
+        <aside className="hidden xl:block">
+          <div className="sticky top-6">
+            <div className="mb-4 flex items-start justify-between">
+  <div>
+    <p className="text-sm font-bold text-slate-900">
+      Live Preview
+    </p>
+
+    <p className="text-sm text-slate-500">
+      Employee View
+    </p>
+  </div>
+
+  <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
+    {activePreview === "lesson" ? "Lesson" : "Quiz"}
+  </span>
+</div>
+
+            {activePreview === "lesson" ? (
+                <TrainingViewer
+                  title={trainingTitle || "Untitled Training"}
+                  slides={slides}
+                  selectedSlideId={selectedSlideId}
+                />
+              ) : (
+                <QuizViewer question={selectedQuestion} />
+              )}
+          </div>
+        </aside>
+
+        <div className="xl:hidden">
+         <div className="mb-4 flex items-start justify-between">
+          <div>
+            <p className="text-sm font-bold text-slate-900">
+              Live Preview
+            </p>
+
+            <p className="text-sm text-slate-500">
+              Employee View
+            </p>
+          </div>
+
+          <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-700">
+            {activePreview === "lesson" ? "Lesson" : "Quiz"}
+          </span>
+        </div>
+
+          <TrainingViewer
+            title={trainingTitle || "Untitled Training"}
+            slides={slides}
+            selectedSlideId={selectedSlideId}
+          />
+        </div>
       </div>
     </AdminLayout>
   );

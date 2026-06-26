@@ -1,5 +1,5 @@
 import AdminLayout from "@/components/layout/AdminLayout";
-import TrainingViewer from "@/components/training/TrainingViewer";
+import TrainingViewer from "@/components/training/LessonViewer";
 
 const slides = [
   {

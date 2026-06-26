@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Dispatch, SetStateAction, useState } from "react";
 import {
   DndContext,
   DragEndEvent,
@@ -17,11 +17,20 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
-type QuizQuestion = {
+export type QuizQuestion = {
   id: number;
   question: string;
   answers: string[];
   correctAnswerIndex: number;
+  isComplete: boolean;
+};
+
+type QuizBuilderProps = {
+  questions: QuizQuestion[];
+  setQuestions: Dispatch<SetStateAction<QuizQuestion[]>>;
+  selectedQuestionId: number;
+  setSelectedQuestionId: (id: number) => void;
+  onFocusBuilder?: () => void;
 };
 
 type SortableQuestionButtonProps = {
@@ -56,14 +65,8 @@ function SortableQuestionButton({
   ).length;
 
   return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      className={`${isDragging ? "opacity-60" : ""}`}
-    >
-      <button
-        type="button"
-        onClick={onSelect}
+    <div ref={setNodeRef} style={style} className={isDragging ? "opacity-60" : ""}>
+      <div
         className={`w-full rounded-lg border px-3 py-3 text-left text-sm transition ${
           isSelected
             ? "border-blue-600 bg-blue-50 text-blue-700"
@@ -71,7 +74,8 @@ function SortableQuestionButton({
         }`}
       >
         <div className="flex items-start gap-3">
-          <span
+          <button
+            type="button"
             {...attributes}
             {...listeners}
             className={`mt-0.5 flex h-7 w-7 shrink-0 cursor-grab items-center justify-center rounded-full text-xs font-bold active:cursor-grabbing ${
@@ -80,11 +84,22 @@ function SortableQuestionButton({
                 : "bg-slate-100 text-slate-500"
             }`}
             title="Drag to reorder"
+            aria-label="Drag to reorder question"
           >
             ☰
-          </span>
+          </button>
 
-          <div className="min-w-0 flex-1">
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={onSelect}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                onSelect();
+              }
+            }}
+            className="min-w-0 flex-1 cursor-pointer rounded-md"
+          >
             <p className="truncate font-semibold">
               {index + 1}. {question.question || "Untitled Question"}
             </p>
@@ -93,27 +108,37 @@ function SortableQuestionButton({
               {answeredCount} of {question.answers.length} answers filled
             </p>
 
-            <p className="mt-2 text-xs text-slate-400">
-              Correct: Answer {String.fromCharCode(65 + question.correctAnswerIndex)}
-            </p>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <p className="text-xs text-slate-400">
+                Correct: Answer{" "}
+                {String.fromCharCode(65 + question.correctAnswerIndex)}
+              </p>
+
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                  question.isComplete
+                    ? "bg-green-100 text-green-700"
+                    : "bg-amber-100 text-amber-700"
+                }`}
+              >
+                {question.isComplete ? "Ready" : "Incomplete"}
+              </span>
+            </div>
           </div>
         </div>
-      </button>
+      </div>
     </div>
   );
 }
 
-export default function QuizBuilder() {
-  const [questions, setQuestions] = useState<QuizQuestion[]>([
-    {
-      id: 1,
-      question: "",
-      answers: ["", "", "", ""],
-      correctAnswerIndex: 0,
-    },
-  ]);
-
-  const [selectedQuestionId, setSelectedQuestionId] = useState(1);
+export default function QuizBuilder({
+  questions,
+  setQuestions,
+  selectedQuestionId,
+  setSelectedQuestionId,
+  onFocusBuilder,
+}: QuizBuilderProps) {
+  const [isOutlineCollapsed, setIsOutlineCollapsed] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -132,11 +157,12 @@ export default function QuizBuilder() {
   );
 
   function addQuestion() {
-    const newQuestion = {
+    const newQuestion: QuizQuestion = {
       id: Date.now(),
       question: "",
       answers: ["", "", "", ""],
       correctAnswerIndex: 0,
+      isComplete: false,
     };
 
     setQuestions([...questions, newQuestion]);
@@ -147,6 +173,16 @@ export default function QuizBuilder() {
     setQuestions(
       questions.map((question) =>
         question.id === id ? { ...question, question: value } : question
+      )
+    );
+  }
+
+  function toggleQuestionComplete(id: number) {
+    setQuestions(
+      questions.map((question) =>
+        question.id === id
+          ? { ...question, isComplete: !question.isComplete }
+          : question
       )
     );
   }
@@ -203,6 +239,7 @@ export default function QuizBuilder() {
       question: questionToCopy.question
         ? `${questionToCopy.question} Copy`
         : "Untitled Question Copy",
+      isComplete: false,
     };
 
     const questionIndex = questions.findIndex((question) => question.id === id);
@@ -228,7 +265,11 @@ export default function QuizBuilder() {
   }
 
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+    <div
+  onPointerDown={onFocusBuilder}
+  onFocusCapture={onFocusBuilder}
+  className="rounded-xl border border-slate-200 bg-slate-50 p-5"
+>
       <div className="mb-5 flex items-center justify-between">
         <div>
           <h3 className="font-bold text-slate-900">Quiz Questions</h3>
@@ -246,35 +287,102 @@ export default function QuizBuilder() {
         </button>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[280px_1fr]">
-        <aside className="rounded-xl border border-slate-200 bg-white p-3">
-          <p className="mb-3 px-2 text-xs font-bold uppercase tracking-wide text-slate-400">
-            Question Outline
-          </p>
+      <div
+        className={`grid gap-5 transition-all duration-300 ${
+          isOutlineCollapsed
+            ? "lg:grid-cols-[44px_1fr]"
+            : "lg:grid-cols-[280px_1fr]"
+        }`}
+      >
+        <aside className="overflow-hidden rounded-xl border border-slate-200 bg-white transition-all duration-300">
+          <div
+            className={`flex items-center border-b border-slate-200 p-3 ${
+              isOutlineCollapsed ? "justify-center" : "justify-between"
+            }`}
+          >
+            {!isOutlineCollapsed && (
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                Question Outline
+              </p>
+            )}
 
-          <DndContext
-  id="quiz-builder-dnd"
-  sensors={sensors}
-  collisionDetection={closestCenter}
-  onDragEnd={handleDragEnd}
->
-            <SortableContext
-              items={questions.map((question) => question.id)}
-              strategy={verticalListSortingStrategy}
+            <button
+              type="button"
+              onClick={() => setIsOutlineCollapsed(!isOutlineCollapsed)}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100"
+              title={
+                isOutlineCollapsed
+                  ? "Expand question outline"
+                  : "Collapse question outline"
+              }
             >
-              <div className="space-y-2">
-                {questions.map((question, index) => (
-                  <SortableQuestionButton
-                    key={question.id}
-                    question={question}
-                    index={index}
-                    isSelected={question.id === selectedQuestionId}
-                    onSelect={() => setSelectedQuestionId(question.id)}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
+              {isOutlineCollapsed ? "▶" : "◀"}
+            </button>
+          </div>
+
+          {isOutlineCollapsed && (
+            <div className="flex flex-col items-center gap-2 p-2">
+              {questions.map((question, index) => (
+                <button
+                  key={question.id}
+                  type="button"
+                  onClick={() => setSelectedQuestionId(question.id)}
+                  className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition ${
+                    question.id === selectedQuestionId
+                      ? "bg-blue-600 text-white"
+                      : question.isComplete
+                      ? "bg-green-100 text-green-700 hover:bg-green-200"
+                      : "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                  }`}
+                  title={`${question.question || `Question ${index + 1}`} - ${
+                    question.isComplete ? "Ready" : "Incomplete"
+                  }`}
+                >
+                  <div className="relative flex h-8 w-8 items-center justify-center">
+                    <span>{index + 1}</span>
+
+                    <span
+                      className={`absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold ${
+                        question.isComplete
+                          ? "bg-green-600 text-white"
+                          : "bg-amber-500 text-white"
+                      }`}
+                    >
+                      {question.isComplete ? "✓" : "!"}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {!isOutlineCollapsed && (
+            <div className="p-3">
+              <DndContext
+                id="quiz-builder-dnd"
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={questions.map((question) => question.id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <div className="space-y-2">
+                    {questions.map((question, index) => (
+                      <SortableQuestionButton
+                        key={question.id}
+                        question={question}
+                        index={index}
+                        isSelected={question.id === selectedQuestionId}
+                        onSelect={() => setSelectedQuestionId(question.id)}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
+            </div>
+          )}
         </aside>
 
         <section className="rounded-xl border border-slate-200 bg-white p-5">
@@ -290,6 +398,20 @@ export default function QuizBuilder() {
             </div>
 
             <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => toggleQuestionComplete(selectedQuestion.id)}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                  selectedQuestion.isComplete
+                    ? "border-green-300 bg-green-50 text-green-700 hover:bg-green-100"
+                    : "border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                }`}
+              >
+                {selectedQuestion.isComplete
+                  ? "Mark Incomplete"
+                  : "Mark Complete"}
+              </button>
+
               <button
                 type="button"
                 onClick={() => duplicateQuestion(selectedQuestion.id)}
@@ -353,55 +475,49 @@ export default function QuizBuilder() {
             </div>
 
             <div>
-              <label className="block text-sm font-semibold text-slate-700">
-                Correct Answer
-              </label>
+  <label className="block text-sm font-semibold text-slate-700">
+    Correct Answer
+  </label>
 
-              <select
-                value={selectedQuestion.correctAnswerIndex}
-                onChange={(event) =>
-                  updateCorrectAnswer(
-                    selectedQuestion.id,
-                    Number(event.target.value)
-                  )
-                }
-                className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
-              >
-                {selectedQuestion.answers.map((_, answerIndex) => (
-                  <option key={answerIndex} value={answerIndex}>
-                    Answer {String.fromCharCode(65 + answerIndex)}
-                  </option>
-                ))}
-              </select>
-            </div>
+  <div className="mt-3 grid gap-3 md:grid-cols-2">
+    {selectedQuestion.answers.map((answer, answerIndex) => {
+      const isCorrect = selectedQuestion.correctAnswerIndex === answerIndex;
 
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm font-bold text-slate-900">
-                Employee Preview
-              </p>
+      return (
+        <button
+          key={answerIndex}
+          type="button"
+          onClick={() =>
+            updateCorrectAnswer(selectedQuestion.id, answerIndex)
+          }
+          className={`flex items-center gap-3 rounded-lg border px-4 py-3 text-left text-sm transition ${
+            isCorrect
+              ? "border-blue-600 bg-blue-50 text-blue-700"
+              : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+          }`}
+        >
+          <span
+            className={`flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-bold ${
+              isCorrect
+                ? "border-blue-600 bg-blue-600 text-white"
+                : "border-slate-300 bg-white text-transparent"
+            }`}
+          >
+            ✓
+          </span>
 
-              <p className="mt-3 text-sm font-semibold text-slate-700">
-                {selectedQuestion.question || "Question text will appear here."}
-              </p>
+          <span className="font-semibold">
+            Answer {String.fromCharCode(65 + answerIndex)}
+          </span>
 
-              <div className="mt-3 space-y-2">
-                {selectedQuestion.answers.map((answer, answerIndex) => (
-                  <div
-                    key={answerIndex}
-                    className={`rounded-lg border px-3 py-2 text-sm ${
-                      answerIndex === selectedQuestion.correctAnswerIndex
-                        ? "border-green-300 bg-green-50 text-green-800"
-                        : "border-slate-200 bg-white text-slate-700"
-                    }`}
-                  >
-                    <span className="font-semibold">
-                      {String.fromCharCode(65 + answerIndex)}.
-                    </span>{" "}
-                    {answer || `Answer ${String.fromCharCode(65 + answerIndex)}`}
-                  </div>
-                ))}
-              </div>
-            </div>
+          <span className="min-w-0 truncate text-slate-500">
+            {answer || "No answer text yet"}
+          </span>
+        </button>
+      );
+    })}
+  </div>
+</div>
           </div>
         </section>
       </div>
