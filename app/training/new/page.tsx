@@ -3,7 +3,7 @@
 import { useState } from "react";
 import AdminLayout from "@/components/layout/AdminLayout";
 import SlideBuilder, { Slide } from "@/components/training/LessonBuilder";
-import TrainingViewer from "@/components/training/LessonViewer";
+import { SlidePreviewCard } from "@/components/training/RenderedSlide";
 import QuizBuilder, { QuizQuestion } from "@/components/training/QuizBuilder";
 import QuizViewer from "@/components/training/QuizViewer";
 
@@ -213,7 +213,7 @@ const selectedQuestion =
 
             <button
               type="button"
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+              className="company-primary-button rounded-lg px-4 py-2 text-sm font-semibold"
             >
               Publish
             </button>
@@ -239,10 +239,14 @@ const selectedQuestion =
 </div>
 
             {activePreview === "lesson" ? (
-                <TrainingViewer
+                <SlidePreviewCard
                   title={trainingTitle || "Untitled Training"}
                   slides={slides}
                   selectedSlideId={selectedSlideId}
+                  onSlideChange={(id) => {
+                    setSelectedSlideId(id);
+                    setActivePreview("lesson");
+                  }}
                 />
               ) : (
                 <QuizViewer question={selectedQuestion} />
@@ -267,11 +271,19 @@ const selectedQuestion =
           </span>
         </div>
 
-          <TrainingViewer
-            title={trainingTitle || "Untitled Training"}
-            slides={slides}
-            selectedSlideId={selectedSlideId}
-          />
+          {activePreview === "lesson" ? (
+            <SlidePreviewCard
+              title={trainingTitle || "Untitled Training"}
+              slides={slides}
+              selectedSlideId={selectedSlideId}
+              onSlideChange={(id) => {
+                setSelectedSlideId(id);
+                setActivePreview("lesson");
+              }}
+            />
+          ) : (
+            <QuizViewer question={selectedQuestion} />
+          )}
         </div>
       </div>
     </AdminLayout>
