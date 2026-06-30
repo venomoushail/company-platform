@@ -15,6 +15,8 @@ type TrainingViewerProps = {
   selectedSlideId?: number;
   onSlideChange?: (slideId: number) => void;
   onComplete?: () => void;
+  finalActionLabel?: string;
+  completeLabel?: string;
 };
 
 type SlideNavigationPaneProps = {
@@ -28,6 +30,8 @@ type SlideControlsProps = {
   isFirstSlide: boolean;
   isLastSlide: boolean;
   isComplete: boolean;
+  finalActionLabel: string;
+  completeLabel: string;
   onPrevious: () => void;
   onNext: () => void;
 };
@@ -108,6 +112,8 @@ function SlideControls({
   isFirstSlide,
   isLastSlide,
   isComplete,
+  finalActionLabel,
+  completeLabel,
   onPrevious,
   onNext,
 }: SlideControlsProps) {
@@ -136,11 +142,11 @@ function SlideControls({
         {isComplete ? (
           <>
             <CheckCircle2 size={17} strokeWidth={2.4} />
-            Lesson Complete
+            {completeLabel}
           </>
         ) : isLastSlide ? (
           <>
-            Finish Lesson
+            {finalActionLabel}
             <CheckCircle2 size={17} strokeWidth={2.4} />
           </>
         ) : (
@@ -160,6 +166,8 @@ export default function TrainingViewer({
   selectedSlideId,
   onSlideChange,
   onComplete,
+  finalActionLabel = "Finish Lesson",
+  completeLabel = "Lesson Complete",
 }: TrainingViewerProps) {
   const firstSlideId = slides[0]?.id;
   const [internalActiveSlideId, setInternalActiveSlideId] = useState<
@@ -252,6 +260,8 @@ export default function TrainingViewer({
           isFirstSlide={isFirstSlide}
           isLastSlide={isLastSlide}
           isComplete={isComplete}
+          finalActionLabel={finalActionLabel}
+          completeLabel={completeLabel}
           onPrevious={goToPreviousSlide}
           onNext={goToNextSlide}
         />

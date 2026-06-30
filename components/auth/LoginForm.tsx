@@ -3,6 +3,7 @@
 import { FormEvent, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { isAdminRole } from "@/lib/auth/roles";
 
 export default function LoginForm() {
   const router = useRouter();
@@ -24,10 +25,11 @@ export default function LoginForm() {
     setIsLoading(true);
     setError(null);
 
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
+    const { data: signInData, error: signInError } =
+      await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
 
     setIsLoading(false);
 
@@ -36,7 +38,32 @@ export default function LoginForm() {
       return;
     }
 
-    router.replace(searchParams.get("next") || "/");
+    if (!signInData.user) {
+      router.replace("/");
+      router.refresh();
+      return;
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("id", signInData.user.id)
+      .maybeSingle();
+
+    if (profileError) {
+      setError(profileError.message);
+      return;
+    }
+
+    const nextPath = searchParams.get("next");
+    const destination =
+      profile && !isAdminRole(profile.role)
+        ? nextPath?.startsWith("/employee")
+          ? nextPath
+          : "/employee/dashboard"
+        : nextPath || "/";
+
+    router.replace(destination);
     router.refresh();
   }
 

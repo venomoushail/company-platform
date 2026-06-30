@@ -57,6 +57,8 @@ type EmployeesApiResponse = {
 
 const roles: ProfileRole[] = ["employee", "manager", "admin"];
 const unassignedLocationFilterId = "__unassigned__";
+const filterControlClass =
+  "mt-2 h-11 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-blue-600";
 const positionDisplayOrder = [
   "Host",
   "Production",
@@ -337,6 +339,7 @@ export default function EmployeesPage() {
   const [employees, setEmployees] = useState<EmployeeWithPositions[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [adminProfile, setAdminProfile] = useState<Profile | null>(null);
   const [companyName, setCompanyName] = useState("");
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingEmployeeId, setEditingEmployeeId] = useState<string | null>(null);
@@ -350,6 +353,12 @@ export default function EmployeesPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionEmployeeId, setActionEmployeeId] = useState<string | null>(null);
   const [passwordSetupEmployeeId, setPasswordSetupEmployeeId] = useState<
+    string | null
+  >(null);
+  const [testPasswordEmployeeId, setTestPasswordEmployeeId] = useState<
+    string | null
+  >(null);
+  const [actionMenuEmployeeId, setActionMenuEmployeeId] = useState<
     string | null
   >(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -418,6 +427,7 @@ export default function EmployeesPage() {
   );
 
   const isEditMode = editingEmployeeId !== null;
+  const canSetTestPassword = adminProfile?.role === "admin";
 
   const fetchEmployees = useCallback(async (showLoading = true) => {
     await Promise.resolve();
@@ -468,6 +478,7 @@ export default function EmployeesPage() {
     );
     setLocations(employeesData.locations);
     setPositions(sortPositions(employeesData.positions));
+    setAdminProfile(employeesData.adminProfile);
     setCompanyName(employeesData.company.name);
     setIsFetching(false);
   }, []);
@@ -555,6 +566,7 @@ export default function EmployeesPage() {
   }
 
   function openEditForm(employee: EmployeeWithPositions) {
+    setActionMenuEmployeeId(null);
     setEditingEmployeeId(employee.id);
     setFormValues({
       first_name: employee.first_name,
@@ -666,6 +678,8 @@ export default function EmployeesPage() {
   }
 
   async function handleToggleActive(employee: EmployeeWithPositions) {
+    setActionMenuEmployeeId(null);
+
     if (
       employee.is_active &&
       !window.confirm(`Deactivate ${employee.full_name}?`)
@@ -745,6 +759,8 @@ export default function EmployeesPage() {
   }
 
   async function handleSendPasswordSetup(employee: EmployeeWithPositions) {
+    setActionMenuEmployeeId(null);
+
     const supabase = createBrowserSupabaseClient();
 
     if (!supabase) {
@@ -793,14 +809,76 @@ export default function EmployeesPage() {
     setSuccessMessage("Password setup email sent.");
   }
 
+  async function handleSetTestPassword(employee: EmployeeWithPositions) {
+    setActionMenuEmployeeId(null);
+
+    // TODO: Remove this testing-only password override, or restrict it further,
+    // before production launch.
+    const newPassword = window.prompt(
+      `Enter a temporary test password for ${employee.full_name}.`
+    );
+
+    if (newPassword === null) return;
+
+    if (newPassword.trim().length < 6) {
+      setPageError("Enter a temporary password with at least 6 characters.");
+      return;
+    }
+
+    const supabase = createBrowserSupabaseClient();
+
+    if (!supabase) {
+      setPageError("Supabase environment variables are not configured.");
+      return;
+    }
+
+    setTestPasswordEmployeeId(employee.id);
+    setPageError(null);
+    setSuccessMessage(null);
+
+    const { data: sessionData, error: sessionError } =
+      await supabase.auth.getSession();
+
+    if (sessionError || !sessionData.session) {
+      setPageError(sessionError?.message || "Sign in before updating employees.");
+      setTestPasswordEmployeeId(null);
+      return;
+    }
+
+    const response = await fetch("/api/employees/test-password", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${sessionData.session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        employee_id: employee.id,
+        password: newPassword.trim(),
+      }),
+    });
+    const data = await response.json();
+
+    setTestPasswordEmployeeId(null);
+
+    if (!response.ok) {
+      console.error("Unable to set test password", data);
+      setPageError(
+        getReadableErrorMessage(data, "Unable to set test password.")
+      );
+      return;
+    }
+
+    setSuccessMessage(`Test password set for ${employee.full_name}.`);
+  }
+
   return (
     <AdminLayout
       title="Employees"
       description="Manage employee profiles, roles, locations, and account status."
     >
       <div className="space-y-6">
-        <div className="flex flex-col gap-4 rounded-xl bg-white p-5 shadow-sm xl:flex-row xl:items-end xl:justify-between">
-          <div className="grid flex-1 gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_180px_220px_180px]">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(260px,1fr)_180px_240px_180px_auto] xl:items-end">
             <div>
               <label className="block text-sm font-semibold text-slate-700">
                 Search
@@ -810,7 +888,7 @@ export default function EmployeesPage() {
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder="Search name, email, or employee #"
-                className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+                className={filterControlClass}
               />
             </div>
 
@@ -823,7 +901,7 @@ export default function EmployeesPage() {
                 onChange={(event) =>
                   setRoleFilter(event.target.value as ProfileRole | "all")
                 }
-                className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+                className={filterControlClass}
               >
                 <option value="all">All roles</option>
                 {roles.map((role) => (
@@ -844,7 +922,7 @@ export default function EmployeesPage() {
                   setIsLocationFilterOpen((isOpen) => !isOpen)
                 }
                 aria-expanded={isLocationFilterOpen}
-                className="mt-2 flex w-full items-center justify-between gap-2 rounded-lg border border-slate-300 px-4 py-3 text-left text-sm font-medium text-slate-900 outline-none hover:bg-slate-50 focus:border-blue-600"
+                className={`${filterControlClass} flex items-center justify-between gap-2 text-left hover:bg-slate-50`}
               >
                 <span className="truncate">
                   {getLocationFilterButtonLabel(
@@ -914,23 +992,22 @@ export default function EmployeesPage() {
                     event.target.value as "all" | "active" | "inactive"
                   )
                 }
-                className="mt-2 w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+                className={filterControlClass}
               >
                 <option value="all">All statuses</option>
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
               </select>
             </div>
+            <button
+              type="button"
+              onClick={openForm}
+              disabled={isFetching}
+              className="company-primary-button h-11 rounded-lg px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              + Add Employee
+            </button>
           </div>
-
-          <button
-            type="button"
-            onClick={openForm}
-            disabled={isFetching}
-            className="company-primary-button rounded-lg px-4 py-3 text-sm font-semibold"
-          >
-            + Add Employee
-          </button>
         </div>
 
         {pageError && (
@@ -1173,7 +1250,7 @@ export default function EmployeesPage() {
           </section>
         )}
 
-        <section className="overflow-hidden rounded-xl bg-white shadow-sm">
+        <section className="rounded-xl bg-white shadow-sm">
           {isFetching ? (
             <div className="px-6 py-12 text-center">
               <p className="font-semibold text-slate-900">Loading employees</p>
@@ -1250,7 +1327,7 @@ export default function EmployeesPage() {
                     >
                       Hire Date
                     </SortableTableHeader>
-                    <TableHeader>Actions</TableHeader>
+                    <TableHeader className="w-28 text-right">Actions</TableHeader>
                   </tr>
                 </thead>
 
@@ -1308,49 +1385,83 @@ export default function EmployeesPage() {
                         </span>
                       </TableCell>
                       <TableCell>{formatDate(employee.hire_date)}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-2">
+                      <td className="relative px-6 py-4 text-right text-sm text-slate-600">
+                        <div className="inline-block text-left">
                           <button
                             type="button"
-                            onClick={() => openEditForm(employee)}
-                            disabled={isSubmitting || actionEmployeeId !== null}
-                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleToggleActive(employee)}
-                            disabled={
-                              isSubmitting || actionEmployeeId === employee.id
-                            }
-                            className={`rounded-lg px-3 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-50 ${
-                              employee.is_active
-                                ? "border border-red-200 text-red-700 hover:bg-red-50"
-                                : "border border-green-200 text-green-700 hover:bg-green-50"
-                            }`}
-                          >
-                            {actionEmployeeId === employee.id
-                              ? "Updating..."
-                              : employee.is_active
-                                ? "Deactivate"
-                                : "Reactivate"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSendPasswordSetup(employee)}
                             disabled={
                               isSubmitting ||
-                              passwordSetupEmployeeId === employee.id
+                              actionEmployeeId === employee.id ||
+                              passwordSetupEmployeeId === employee.id ||
+                              testPasswordEmployeeId === employee.id
                             }
-                            className="rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            onClick={() =>
+                              setActionMenuEmployeeId((currentId) =>
+                                currentId === employee.id ? null : employee.id
+                              )
+                            }
+                            aria-expanded={actionMenuEmployeeId === employee.id}
+                            className="inline-flex h-9 items-center justify-center rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {passwordSetupEmployeeId === employee.id
-                              ? "Sending..."
-                              : "Send Password Setup"}
+                            Actions
                           </button>
+
+                          {actionMenuEmployeeId === employee.id && (
+                            <div className="absolute right-6 z-30 mt-2 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 text-left shadow-lg">
+                              <button
+                                type="button"
+                                onClick={() => openEditForm(employee)}
+                                className="block w-full px-4 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                Edit
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleSendPasswordSetup(employee)}
+                                className="block w-full px-4 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                {passwordSetupEmployeeId === employee.id
+                                  ? "Sending password setup..."
+                                  : "Send Password Setup"}
+                              </button>
+
+                              {canSetTestPassword && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleSetTestPassword(employee)}
+                                  className="block w-full px-4 py-2.5 text-left text-sm font-medium text-amber-700 hover:bg-amber-50"
+                                >
+                                  {testPasswordEmployeeId === employee.id
+                                    ? "Setting test password..."
+                                    : "Set Test Password"}
+                                  <span className="mt-0.5 block text-xs font-semibold text-amber-600">
+                                    Testing only
+                                  </span>
+                                </button>
+                              )}
+
+                              <div className="my-1 border-t border-slate-100" />
+
+                              <button
+                                type="button"
+                                onClick={() => handleToggleActive(employee)}
+                                className={`block w-full px-4 py-2.5 text-left text-sm font-semibold ${
+                                  employee.is_active
+                                    ? "text-red-700 hover:bg-red-50"
+                                    : "text-green-700 hover:bg-green-50"
+                                }`}
+                              >
+                                {actionEmployeeId === employee.id
+                                  ? "Updating status..."
+                                  : employee.is_active
+                                    ? "Deactivate"
+                                    : "Reactivate"}
+                              </button>
+                            </div>
+                          )}
                         </div>
-                      </TableCell>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -1415,9 +1526,15 @@ function SortableTableHeader({
   );
 }
 
-function TableHeader({ children }: { children: React.ReactNode }) {
+function TableHeader({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <th className="px-6 py-4 text-sm font-semibold text-slate-600">
+    <th className={`px-6 py-4 text-sm font-semibold text-slate-600 ${className}`}>
       {children}
     </th>
   );

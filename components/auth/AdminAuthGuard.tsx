@@ -51,10 +51,7 @@ export default function AdminAuthGuard({ children }: AdminAuthGuardProps) {
       }
 
       if (!isAdminRole(context.role)) {
-        setGuardState({
-          status: "unauthorized",
-          message: "You do not have access to this admin area.",
-        });
+        router.replace("/employee/dashboard");
         return;
       }
 

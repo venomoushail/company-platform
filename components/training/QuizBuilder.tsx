@@ -23,6 +23,9 @@ export type QuizQuestion = {
   answers: string[];
   correctAnswerIndex: number;
   isComplete: boolean;
+  questionType?: string;
+  points?: number;
+  explanation?: string | null;
 };
 
 type QuizBuilderProps = {

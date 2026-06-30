@@ -10,7 +10,7 @@ export default function LoginPage() {
             Employee Training System
           </p>
           <h1 className="mt-2 text-2xl font-bold text-slate-900">
-            Admin sign in
+            Sign in
           </h1>
           <p className="mt-2 text-sm text-slate-500">
             Use the account created for you in Supabase Auth.
