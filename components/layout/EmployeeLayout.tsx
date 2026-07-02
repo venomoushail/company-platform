@@ -1,14 +1,17 @@
 "use client";
 
 import { ReactNode, useEffect, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
 import {
   BookOpenCheck,
   CheckCircle2,
+  LayoutDashboard,
   LogOut,
   UserCircle,
 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import { CompanyThemeProvider, useCompanyTheme } from "@/components/theme/CompanyThemeProvider";
+import { isAdminRole } from "@/lib/auth/roles";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import type { Company, Profile } from "@/types/supabase";
 
@@ -106,6 +109,7 @@ function EmployeeShell({
   const router = useRouter();
   const { companyName, logoUrl } = useCompanyTheme();
   const [activeTab, setActiveTab] = useState("my-trainings");
+  const canAccessAdminPortal = profile ? isAdminRole(profile.role) : false;
 
   useEffect(() => {
     function syncActiveTab() {
@@ -187,6 +191,15 @@ function EmployeeShell({
                   {profile?.preferred_name || profile?.first_name || "Employee"}
                 </p>
                 <p className="mt-0.5 text-xs opacity-75">Training account</p>
+                {canAccessAdminPortal && (
+                  <Link
+                    href="/"
+                    className="mt-3 inline-flex items-center gap-2 rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold hover:bg-black/15"
+                  >
+                    <LayoutDashboard size={15} />
+                    Admin Portal
+                  </Link>
+                )}
                 <button
                   type="button"
                   onClick={handleSignOut}

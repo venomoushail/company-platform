@@ -41,6 +41,9 @@ const orderedListPattern = /^\s*\d+[.)]\s+(.+)$/;
 const headingPattern = /^\s{0,3}#{1,3}\s+(.+)$/;
 const inlineFormatPattern =
   /(\[color=(blue|green|red|orange|gray|black)\][\s\S]+?\[\/color\]|\*\*[^*]+\*\*|\*[^*]+\*|__[^_]+__|_[^_]+_)/g;
+const htmlBlockPattern =
+  /<(h[1-6]|p|ul|ol)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi;
+const htmlListItemPattern = /<li(?:\s[^>]*)?>([\s\S]*?)<\/li>/gi;
 
 type LessonTextColor = "blue" | "green" | "red" | "orange" | "gray" | "black";
 
@@ -96,6 +99,69 @@ function parseInlineText(text: string): TextToken[] {
   return tokens.length > 0 ? tokens : [{ type: "text", value: text }];
 }
 
+function decodeHtmlEntities(value: string) {
+  return value
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#039;/g, "'");
+}
+
+function stripHtmlTags(value: string) {
+  return decodeHtmlEntities(value.replace(/<[^>]*>/g, "")).trim();
+}
+
+function getHtmlTagColor(attributes: string) {
+  const dataColor = attributes.match(
+    /\sdata-color=["']?(blue|green|red|orange|gray|black)["']?/i
+  )?.[1];
+
+  if (dataColor) return dataColor as LessonTextColor;
+
+  const classColor = attributes.match(
+    /\btext-(blue|green|red|orange)-(?:600|700)\b|\btext-slate-(600|950)\b/i
+  );
+
+  if (!classColor) return null;
+
+  if (classColor[1]) return classColor[1] as LessonTextColor;
+  if (classColor[2] === "600") return "gray";
+
+  return "black";
+}
+
+function htmlInlineToLessonMarkup(html: string): string {
+  let nextHtml = html.replace(/<br\s*\/?>/gi, "\n");
+  let previousHtml = "";
+
+  while (nextHtml !== previousHtml) {
+    previousHtml = nextHtml;
+    nextHtml = nextHtml
+      .replace(
+        /<(strong|b)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi,
+        (_match, _tag, inner: string) =>
+          `**${htmlInlineToLessonMarkup(inner)}**`
+      )
+      .replace(
+        /<(em|i)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi,
+        (_match, _tag, inner: string) => `*${htmlInlineToLessonMarkup(inner)}*`
+      )
+      .replace(
+        /<span([^>]*)>([\s\S]*?)<\/span>/gi,
+        (_match, attributes: string, inner: string) => {
+          const color = getHtmlTagColor(attributes);
+          const text = htmlInlineToLessonMarkup(inner);
+
+          return color ? `[color=${color}]${text}[/color]` : text;
+        }
+      );
+  }
+
+  return stripHtmlTags(nextHtml);
+}
+
 function renderInlineText(text: string, keyPrefix: string): ReactNode[] {
   return parseInlineText(text).map((token, index) => {
     const key = `${keyPrefix}-${index}`;
@@ -126,6 +192,12 @@ function renderInlineText(text: string, keyPrefix: string): ReactNode[] {
 
     return token.value;
   });
+}
+
+function looksLikeHtml(content: string) {
+  return /<\/?(p|h[1-6]|ul|ol|li|strong|b|em|i|span|br)(\s[^>]*)?>/i.test(
+    content
+  );
 }
 
 function getLineContent(line: string, pattern: RegExp) {
@@ -202,6 +274,65 @@ function parseLessonContent(content: string): ContentBlock[] {
   return blocks;
 }
 
+function parseHtmlLessonContent(content: string): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+  let lastIndex = 0;
+
+  function parseLegacyFragment(fragment: string) {
+    const legacyBlocks = parseLessonContent(stripHtmlTags(fragment));
+    blocks.push(...legacyBlocks);
+  }
+
+  content.replace(
+    htmlBlockPattern,
+    (match, tag: string, innerHtml: string, offset: number) => {
+      if (offset > lastIndex) {
+        parseLegacyFragment(content.slice(lastIndex, offset));
+      }
+
+      const normalizedTag = tag.toLowerCase();
+
+      if (normalizedTag === "ul" || normalizedTag === "ol") {
+        const items: string[] = [];
+
+        innerHtml.replace(htmlListItemPattern, (_itemMatch, itemHtml: string) => {
+          const item = htmlInlineToLessonMarkup(itemHtml);
+
+          if (item) items.push(item);
+          return _itemMatch;
+        });
+
+        if (items.length > 0) {
+          blocks.push({
+            type: normalizedTag === "ul" ? "unordered-list" : "ordered-list",
+            items,
+          });
+        }
+      } else {
+        const text = htmlInlineToLessonMarkup(innerHtml);
+
+        if (!text.trim()) {
+          blocks.push({ type: "blank" });
+        } else {
+          blocks.push({
+            type: normalizedTag.startsWith("h") ? "heading" : "paragraph",
+            lines: text.split("\n"),
+          });
+        }
+      }
+
+      lastIndex = offset + match.length;
+      return match;
+    }
+  );
+
+  if (lastIndex < content.length) {
+    parseLegacyFragment(content.slice(lastIndex));
+  }
+
+  return blocks.length > 0 ? blocks : parseLessonContent(stripHtmlTags(content));
+}
+
 export default function LessonContent({
   content = "",
   emptyText = "Slide content will appear here.",
@@ -215,7 +346,9 @@ export default function LessonContent({
     return <p className={emptyClassName}>{emptyText}</p>;
   }
 
-  const blocks = parseLessonContent(content);
+  const blocks = looksLikeHtml(content)
+    ? parseHtmlLessonContent(content)
+    : parseLessonContent(content);
 
   return (
     <div className={className}>

@@ -30,6 +30,15 @@ type EmployeeFormValues = {
 
 type EmployeeFormErrors = Partial<Record<keyof EmployeeFormValues, string>>;
 
+type TestPasswordFormValues = {
+  password: string;
+  confirmPassword: string;
+};
+
+type TestPasswordFormErrors = Partial<
+  Record<keyof TestPasswordFormValues, string>
+>;
+
 type SortKey =
   | "name"
   | "email"
@@ -80,6 +89,11 @@ const emptyFormValues: EmployeeFormValues = {
   position_ids: [],
   hire_date: "",
   is_active: true,
+};
+
+const emptyTestPasswordValues: TestPasswordFormValues = {
+  password: "",
+  confirmPassword: "",
 };
 
 function formatDate(date: string | null) {
@@ -335,6 +349,23 @@ function validateEmployeeForm(
   return errors;
 }
 
+function validateTestPasswordForm(values: TestPasswordFormValues) {
+  const errors: TestPasswordFormErrors = {};
+  const password = values.password.trim();
+
+  if (!password) {
+    errors.password = "Password is required.";
+  } else if (password.length < 8) {
+    errors.password = "Enter a password with at least 8 characters.";
+  }
+
+  if (values.confirmPassword.trim() !== password) {
+    errors.confirmPassword = "Passwords must match.";
+  }
+
+  return errors;
+}
+
 export default function EmployeesPage() {
   const [employees, setEmployees] = useState<EmployeeWithPositions[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -358,6 +389,15 @@ export default function EmployeesPage() {
   const [testPasswordEmployeeId, setTestPasswordEmployeeId] = useState<
     string | null
   >(null);
+  const [testPasswordEmployee, setTestPasswordEmployee] =
+    useState<EmployeeWithPositions | null>(null);
+  const [testPasswordValues, setTestPasswordValues] =
+    useState<TestPasswordFormValues>(emptyTestPasswordValues);
+  const [testPasswordErrors, setTestPasswordErrors] =
+    useState<TestPasswordFormErrors>({});
+  const [testPasswordMessage, setTestPasswordMessage] = useState<string | null>(
+    null
+  );
   const [actionMenuEmployeeId, setActionMenuEmployeeId] = useState<
     string | null
   >(null);
@@ -593,6 +633,40 @@ export default function EmployeesPage() {
     setFormMessage(null);
   }
 
+  function openTestPasswordModal(employee: EmployeeWithPositions) {
+    setActionMenuEmployeeId(null);
+    setTestPasswordEmployee(employee);
+    setTestPasswordValues(emptyTestPasswordValues);
+    setTestPasswordErrors({});
+    setTestPasswordMessage(null);
+    setPageError(null);
+    setSuccessMessage(null);
+  }
+
+  function closeTestPasswordModal() {
+    if (testPasswordEmployeeId) return;
+
+    setTestPasswordEmployee(null);
+    setTestPasswordValues(emptyTestPasswordValues);
+    setTestPasswordErrors({});
+    setTestPasswordMessage(null);
+  }
+
+  function updateTestPasswordValue(
+    field: keyof TestPasswordFormValues,
+    value: string
+  ) {
+    setTestPasswordValues((currentValues) => ({
+      ...currentValues,
+      [field]: value,
+    }));
+    setTestPasswordErrors((currentErrors) => ({
+      ...currentErrors,
+      [field]: undefined,
+    }));
+    setTestPasswordMessage(null);
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -809,38 +883,38 @@ export default function EmployeesPage() {
     setSuccessMessage("Password setup email sent.");
   }
 
-  async function handleSetTestPassword(employee: EmployeeWithPositions) {
-    setActionMenuEmployeeId(null);
+  async function handleSetTestPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
 
-    // TODO: Remove this testing-only password override, or restrict it further,
-    // before production launch.
-    const newPassword = window.prompt(
-      `Enter a temporary test password for ${employee.full_name}.`
-    );
+    if (!testPasswordEmployee) return;
 
-    if (newPassword === null) return;
+    const validationErrors = validateTestPasswordForm(testPasswordValues);
 
-    if (newPassword.trim().length < 6) {
-      setPageError("Enter a temporary password with at least 6 characters.");
+    if (Object.keys(validationErrors).length > 0) {
+      setTestPasswordErrors(validationErrors);
       return;
     }
+
+    const newPassword = testPasswordValues.password.trim();
 
     const supabase = createBrowserSupabaseClient();
 
     if (!supabase) {
-      setPageError("Supabase environment variables are not configured.");
+      setTestPasswordMessage("Supabase environment variables are not configured.");
       return;
     }
 
-    setTestPasswordEmployeeId(employee.id);
-    setPageError(null);
+    setTestPasswordEmployeeId(testPasswordEmployee.id);
+    setTestPasswordMessage(null);
     setSuccessMessage(null);
 
     const { data: sessionData, error: sessionError } =
       await supabase.auth.getSession();
 
     if (sessionError || !sessionData.session) {
-      setPageError(sessionError?.message || "Sign in before updating employees.");
+      setTestPasswordMessage(
+        sessionError?.message || "Sign in before updating employees."
+      );
       setTestPasswordEmployeeId(null);
       return;
     }
@@ -852,8 +926,8 @@ export default function EmployeesPage() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        employee_id: employee.id,
-        password: newPassword.trim(),
+        employee_id: testPasswordEmployee.id,
+        password: newPassword,
       }),
     });
     const data = await response.json();
@@ -862,13 +936,14 @@ export default function EmployeesPage() {
 
     if (!response.ok) {
       console.error("Unable to set test password", data);
-      setPageError(
+      setTestPasswordMessage(
         getReadableErrorMessage(data, "Unable to set test password.")
       );
       return;
     }
 
-    setSuccessMessage(`Test password set for ${employee.full_name}.`);
+    setSuccessMessage(`Test password set for ${testPasswordEmployee.full_name}.`);
+    closeTestPasswordModal();
   }
 
   return (
@@ -1429,7 +1504,7 @@ export default function EmployeesPage() {
                               {canSetTestPassword && (
                                 <button
                                   type="button"
-                                  onClick={() => handleSetTestPassword(employee)}
+                                  onClick={() => openTestPasswordModal(employee)}
                                   className="block w-full px-4 py-2.5 text-left text-sm font-medium text-amber-700 hover:bg-amber-50"
                                 >
                                   {testPasswordEmployeeId === employee.id
@@ -1469,6 +1544,105 @@ export default function EmployeesPage() {
             </div>
           )}
         </section>
+
+        {testPasswordEmployee && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 px-4 py-6">
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="test-password-title"
+              className="w-full max-w-md rounded-lg border border-slate-200 bg-white shadow-xl"
+            >
+              <div className="border-b border-slate-200 px-5 py-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
+                  Testing/admin-only
+                </p>
+                <h2
+                  id="test-password-title"
+                  className="mt-1 text-lg font-bold text-slate-900"
+                >
+                  Set Test Password
+                </h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  {testPasswordEmployee.full_name}
+                </p>
+                <p className="text-sm font-medium text-slate-500">
+                  {testPasswordEmployee.email}
+                </p>
+              </div>
+
+              <form onSubmit={handleSetTestPassword} className="space-y-4 px-5 py-5">
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+                  This testing-only admin override directly updates the employee
+                  password.
+                </div>
+
+                {testPasswordMessage && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+                    {testPasswordMessage}
+                  </div>
+                )}
+
+                <FormField
+                  label="Password"
+                  error={testPasswordErrors.password}
+                  required
+                >
+                  <input
+                    type="password"
+                    value={testPasswordValues.password}
+                    onChange={(event) =>
+                      updateTestPasswordValue("password", event.target.value)
+                    }
+                    disabled={testPasswordEmployeeId !== null}
+                    autoComplete="new-password"
+                    className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600 disabled:cursor-not-allowed disabled:bg-slate-50"
+                  />
+                </FormField>
+
+                <FormField
+                  label="Confirm Password"
+                  error={testPasswordErrors.confirmPassword}
+                  required
+                >
+                  <input
+                    type="password"
+                    value={testPasswordValues.confirmPassword}
+                    onChange={(event) =>
+                      updateTestPasswordValue(
+                        "confirmPassword",
+                        event.target.value
+                      )
+                    }
+                    disabled={testPasswordEmployeeId !== null}
+                    autoComplete="new-password"
+                    className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600 disabled:cursor-not-allowed disabled:bg-slate-50"
+                  />
+                </FormField>
+
+                <div className="flex items-center justify-end gap-3 border-t border-slate-100 pt-4">
+                  <button
+                    type="button"
+                    onClick={closeTestPasswordModal}
+                    disabled={testPasswordEmployeeId !== null}
+                    className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={testPasswordEmployeeId !== null}
+                    className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {testPasswordEmployeeId
+                      ? "Saving password..."
+                      : "Save Password"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
       </div>
     </AdminLayout>
   );

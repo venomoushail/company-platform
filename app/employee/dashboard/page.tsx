@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import EmployeeLayout from "@/components/layout/EmployeeLayout";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
-import { isAdminRole } from "@/lib/auth/roles";
 import type { Company, Profile, TrainingModule } from "@/types/supabase";
 
 type EmployeeCompany = Pick<
@@ -168,11 +167,6 @@ export default function EmployeeDashboardPage() {
       }
 
       const trainingData = responseData as EmployeeTrainingResponse;
-
-      if (isAdminRole(trainingData.profile.role)) {
-        router.replace("/");
-        return;
-      }
 
       setProfile(trainingData.profile);
       setCompany(trainingData.company);

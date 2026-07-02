@@ -5,7 +5,6 @@ import { useParams, useRouter } from "next/navigation";
 import EmployeeLayout from "@/components/layout/EmployeeLayout";
 import TrainingViewer from "@/components/training/LessonViewer";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
-import { isAdminRole } from "@/lib/auth/roles";
 import type {
   Company,
   Profile,
@@ -185,11 +184,6 @@ export default function EmployeeTrainingPage() {
       }
 
       const trainingData = responseData as EmployeeTrainingDetailResponse;
-
-      if (isAdminRole(trainingData.profile.role)) {
-        router.replace("/");
-        return;
-      }
 
       setProfile(trainingData.profile);
       setCompany(trainingData.company);

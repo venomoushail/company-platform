@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAdminContextForUserId } from "@/lib/auth/server";
 import { isAdminRole } from "@/lib/auth/roles";
+import { getDataScope } from "@/lib/auth/scope";
 import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
@@ -104,31 +105,44 @@ async function requireAdminContext(request: Request) {
     };
   }
 
-  return { response: null, supabase, profile };
+  return { response: null, supabase, profile, scope: getDataScope(profile) };
 }
 
 export async function GET(request: Request) {
-  const { response, supabase, profile } = await requireAdminContext(request);
+  const { response, supabase, scope } = await requireAdminContext(request);
 
   if (response) return response;
 
+  const employeesQuery = supabase
+    .from("profiles")
+    .select("*")
+    .eq("company_id", scope.companyId)
+    .order("last_name", { ascending: true })
+    .order("first_name", { ascending: true });
+  const scopedEmployeesQuery = scope.canAccessAllLocations
+    ? employeesQuery
+    : scope.locationIds.length > 0
+      ? employeesQuery.in("location_id", scope.locationIds)
+      : employeesQuery.limit(0);
+  const locationsQuery = supabase
+    .from("locations")
+    .select("*")
+    .eq("company_id", scope.companyId)
+    .order("store_number", { ascending: true });
+  const scopedLocationsQuery = scope.canAccessAllLocations
+    ? locationsQuery
+    : scope.locationIds.length > 0
+      ? locationsQuery.in("id", scope.locationIds)
+      : locationsQuery.limit(0);
+
   const [employeesResult, modulesResult, locationsResult] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("*")
-      .eq("company_id", profile.company_id)
-      .order("last_name", { ascending: true })
-      .order("first_name", { ascending: true }),
+    scopedEmployeesQuery,
     supabase
       .from("training_modules")
       .select("*")
-      .eq("company_id", profile.company_id)
+      .eq("company_id", scope.companyId)
       .order("title", { ascending: true }),
-    supabase
-      .from("locations")
-      .select("*")
-      .eq("company_id", profile.company_id)
-      .order("store_number", { ascending: true }),
+    scopedLocationsQuery,
   ]);
 
   if (employeesResult.error) {

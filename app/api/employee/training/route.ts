@@ -1,9 +1,15 @@
 import { NextResponse } from "next/server";
 import {
+  isPingramEmailConfigured,
+  sendTrainingCompletionEmail,
+} from "@/lib/email/pingram";
+import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
 } from "@/lib/supabase/admin";
 import type {
+  Location,
+  Profile,
   QuizAttempt,
   QuizQuestionRow,
   TrainingAssignment,
@@ -59,6 +65,21 @@ function jsonError(message: string, status: number) {
 
 function logServerError(message: string, error: unknown) {
   console.error(`[employee-training] ${message}`, error);
+}
+
+function getEmployeeName(employee: Profile) {
+  return (
+    employee.preferred_name?.trim() ||
+    employee.full_name?.trim() ||
+    [employee.first_name, employee.last_name].filter(Boolean).join(" ").trim() ||
+    employee.email
+  );
+}
+
+function formatLocationName(location: Location | null) {
+  if (!location) return "Not assigned";
+
+  return `Store ${location.store_number} - ${location.name}`;
 }
 
 function readString(value: unknown) {
@@ -504,6 +525,158 @@ async function completeAssignmentWithoutQuiz(
     logServerError("Training assignment completion failed", error);
     throw new Error("Unable to complete training assignment.");
   }
+
+  return now;
+}
+
+async function claimCompletionEmailNotification(
+  supabase: ReturnType<typeof createAdminSupabaseClient>,
+  assignmentId: string,
+  employeeId: string
+) {
+  const { data, error } = await supabase
+    .from("training_assignments")
+    .update({ completion_email_sent_at: new Date().toISOString() })
+    .eq("id", assignmentId)
+    .eq("employee_id", employeeId)
+    .eq("status", "completed")
+    .eq("passed", true)
+    .is("completion_email_sent_at", null)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    logServerError("Training completion email claim failed", error);
+    return false;
+  }
+
+  return Boolean(data);
+}
+
+async function sendTrainingCompletionNotification({
+  supabase,
+  assignmentId,
+  employeeId,
+  module,
+  latestScore,
+  completedAt,
+}: {
+  supabase: ReturnType<typeof createAdminSupabaseClient>;
+  assignmentId: string;
+  employeeId: string;
+  module: TrainingModule;
+  latestScore: number | null;
+  completedAt: string | null;
+}) {
+  try {
+    if (!isPingramEmailConfigured()) {
+      console.warn(
+        "[employee-training] Training completion email skipped; Pingram is not configured."
+      );
+      return;
+    }
+
+    const claimed = await claimCompletionEmailNotification(
+      supabase,
+      assignmentId,
+      employeeId
+    );
+
+    if (!claimed) return;
+
+    const { data: employee, error: employeeError } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", employeeId)
+      .maybeSingle();
+
+    if (employeeError || !employee) {
+      logServerError("Completion email employee lookup failed", employeeError);
+      return;
+    }
+
+    const [
+      companyResult,
+      locationResult,
+      locationManagersResult,
+      companyAdminsResult,
+    ] =
+      await Promise.all([
+        supabase
+          .from("companies")
+          .select("name,logo_url")
+          .eq("id", employee.company_id)
+          .maybeSingle(),
+        employee.location_id
+          ? supabase
+              .from("locations")
+              .select("*")
+              .eq("id", employee.location_id)
+              .eq("company_id", employee.company_id)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+        employee.location_id
+          ? supabase
+              .from("profiles")
+              .select("email")
+              .eq("company_id", employee.company_id)
+              .eq("location_id", employee.location_id)
+              .eq("is_active", true)
+              .in("role", ["manager", "admin"])
+          : Promise.resolve({ data: [], error: null }),
+        supabase
+          .from("profiles")
+          .select("email")
+          .eq("company_id", employee.company_id)
+          .eq("role", "admin")
+          .eq("is_active", true),
+      ]);
+
+    if (companyResult.error) {
+      logServerError("Completion email company lookup failed", companyResult.error);
+    }
+
+    if (locationResult.error) {
+      logServerError("Completion email location lookup failed", locationResult.error);
+    }
+
+    if (locationManagersResult.error) {
+      logServerError(
+        "Completion email location manager lookup failed",
+        locationManagersResult.error
+      );
+    }
+
+    if (companyAdminsResult.error) {
+      logServerError(
+        "Completion email company admin lookup failed",
+        companyAdminsResult.error
+      );
+    }
+
+    const recipients = [
+      ...(locationManagersResult.data ?? []).map((recipient) => recipient.email),
+      ...(companyAdminsResult.data ?? []).map((recipient) => recipient.email),
+    ];
+
+    const result = await sendTrainingCompletionEmail({
+      recipients,
+      company: companyResult.data ?? null,
+      employeeName: getEmployeeName(employee),
+      employeeNumber: employee.employee_number,
+      locationName: formatLocationName(locationResult.data),
+      trainingTitle: module.title,
+      latestScore,
+      completedAt,
+      trainingUrl: `/employee/training/${module.id}`,
+    });
+
+    if (!result.sent && !result.skipped) {
+      logServerError("Training completion notification email failed", result);
+    }
+  } catch (error) {
+    logServerError("Training completion notification email failed", error);
+  }
 }
 
 async function markLessonReadyForQuiz(
@@ -651,6 +824,17 @@ async function submitQuizAttempt({
   if (assignmentError) {
     logServerError("Training assignment quiz update failed", assignmentError);
     throw new Error("Unable to update training assignment.");
+  }
+
+  if (passed) {
+    await sendTrainingCompletionNotification({
+      supabase,
+      assignmentId: assignment.id,
+      employeeId,
+      module,
+      latestScore: score,
+      completedAt: now,
+    });
   }
 
   return {
@@ -825,7 +1009,19 @@ export async function POST(request: Request) {
       if ((questionsResult.data?.length ?? 0) > 0) {
         await markLessonReadyForQuiz(supabase, assignment.id);
       } else {
-        await completeAssignmentWithoutQuiz(supabase, assignment.id);
+        const completedAt = await completeAssignmentWithoutQuiz(
+          supabase,
+          assignment.id
+        );
+
+        await sendTrainingCompletionNotification({
+          supabase,
+          assignmentId: assignment.id,
+          employeeId: profile.id,
+          module,
+          latestScore: null,
+          completedAt,
+        });
       }
     } catch (error) {
       return jsonError(

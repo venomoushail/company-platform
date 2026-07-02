@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   Users,
   GraduationCap,
+  BookOpenCheck,
   BarChart3,
   Settings,
   ChevronLeft,
@@ -37,6 +38,11 @@ const navigation = [
     label: "Training",
     href: "/training",
     icon: GraduationCap,
+  },
+  {
+    label: "My Training",
+    href: "/employee/dashboard",
+    icon: BookOpenCheck,
   },
   {
     label: "Reports",

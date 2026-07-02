@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAdminContextForUserId } from "@/lib/auth/server";
 import { isAdminRole } from "@/lib/auth/roles";
+import { getDataScope } from "@/lib/auth/scope";
 import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
@@ -98,7 +99,7 @@ async function requireAdminContext(request: Request) {
     };
   }
 
-  return { response: null, supabase, profile };
+  return { response: null, supabase, profile, scope: getDataScope(profile) };
 }
 
 function getJoinedActivity(
@@ -138,20 +139,27 @@ function isAssignmentPastDue(
 }
 
 export async function GET(request: Request) {
-  const { response, supabase, profile } = await requireAdminContext(request);
+  const { response, supabase, scope } = await requireAdminContext(request);
 
   if (response) return response;
 
+  const employeesQuery = supabase
+    .from("profiles")
+    .select("*")
+    .eq("company_id", scope.companyId)
+    .eq("is_active", true);
+  const scopedEmployeesQuery = scope.canAccessAllLocations
+    ? employeesQuery
+    : scope.locationIds.length > 0
+      ? employeesQuery.in("location_id", scope.locationIds)
+      : employeesQuery.limit(0);
+
   const [employeesResult, modulesResult] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("*")
-      .eq("company_id", profile.company_id)
-      .eq("is_active", true),
+    scopedEmployeesQuery,
     supabase
       .from("training_modules")
       .select("*")
-      .eq("company_id", profile.company_id)
+      .eq("company_id", scope.companyId)
       .neq("status", "archived"),
   ]);
 

@@ -106,8 +106,8 @@ export async function POST(request: Request) {
     return jsonError("Choose an employee.", 400);
   }
 
-  if (newPassword.length < 6) {
-    return jsonError("Enter a temporary password with at least 6 characters.", 400);
+  if (newPassword.length < 8) {
+    return jsonError("Enter a temporary password with at least 8 characters.", 400);
   }
 
   const { data: employee, error: employeeError } = await supabase

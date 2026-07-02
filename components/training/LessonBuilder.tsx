@@ -229,6 +229,10 @@ function inlineMarkupToHtml(text: string): string {
 }
 
 function lessonBodyToEditorHtml(body: string) {
+  if (looksLikeLessonHtml(body)) {
+    return sanitizeLessonBodyHtml(body);
+  }
+
   const lines = body.replace(/\r\n/g, "\n").split("\n");
   const blocks: string[] = [];
   let paragraphLines: string[] = [];
@@ -290,9 +294,89 @@ function isBlankEditorBlock(text: string) {
   return text.replace(/\u00a0/g, " ").trim().length === 0;
 }
 
-function serializeInlineNode(node: Node): string {
+function looksLikeLessonHtml(body: string) {
+  return /<\/?(p|h[1-6]|ul|ol|li|strong|b|em|i|span|br)(\s[^>]*)?>/i.test(body);
+}
+
+function sanitizeLessonBodyHtml(html: string) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  sanitizeLessonNode(template.content);
+
+  return template.innerHTML;
+}
+
+function sanitizeLessonNode(parent: ParentNode) {
+  Array.from(parent.childNodes).forEach((node) => {
+    if (node.nodeType === Node.TEXT_NODE) return;
+
+    if (!(node instanceof HTMLElement)) {
+      node.parentNode?.removeChild(node);
+      return;
+    }
+
+    const tagName = node.tagName.toLowerCase();
+    const allowedTagName = normalizeLessonTagName(tagName);
+
+    if (!allowedTagName) {
+      const nodeParent = node.parentNode;
+      if (!nodeParent) return;
+
+      while (node.firstChild) {
+        nodeParent.insertBefore(node.firstChild, node);
+      }
+
+      nodeParent.removeChild(node);
+      sanitizeLessonNode(nodeParent);
+      return;
+    }
+
+    if (allowedTagName !== tagName) {
+      const replacement = document.createElement(allowedTagName);
+
+      while (node.firstChild) {
+        replacement.appendChild(node.firstChild);
+      }
+
+      node.parentNode?.replaceChild(replacement, node);
+      sanitizeLessonElement(replacement);
+      sanitizeLessonNode(replacement);
+      return;
+    }
+
+    sanitizeLessonElement(node);
+    sanitizeLessonNode(node);
+  });
+}
+
+function normalizeLessonTagName(tagName: string) {
+  if (["p", "br", "h3", "strong", "em", "span", "ul", "ol", "li"].includes(tagName)) {
+    return tagName;
+  }
+
+  if (tagName === "b") return "strong";
+  if (tagName === "i") return "em";
+  if (/^h[1-6]$/.test(tagName)) return "h3";
+
+  return null;
+}
+
+function sanitizeLessonElement(element: HTMLElement) {
+  const textColor = getNodeTextColor(element);
+
+  Array.from(element.attributes).forEach((attribute) => {
+    element.removeAttribute(attribute.name);
+  });
+
+  if (element.tagName === "SPAN" && textColor) {
+    element.dataset.color = textColor;
+    element.className = editorTextColorClasses[textColor];
+  }
+}
+
+function serializeInlineNodeAsHtml(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) {
-    return node.textContent ?? "";
+    return escapeHtml(node.textContent ?? "");
   }
 
   if (!(node instanceof HTMLElement)) {
@@ -300,25 +384,27 @@ function serializeInlineNode(node: Node): string {
   }
 
   if (node.tagName === "BR") {
-    return "\n";
+    return "<br>";
   }
 
-  let childrenText = Array.from(node.childNodes).map(serializeInlineNode).join("");
+  const childrenHtml = Array.from(node.childNodes)
+    .map(serializeInlineNodeAsHtml)
+    .join("");
   const textColor = getNodeTextColor(node);
 
   if (node.tagName === "STRONG" || node.tagName === "B") {
-    childrenText = `**${childrenText}**`;
+    return `<strong>${childrenHtml}</strong>`;
   }
 
   if (node.tagName === "EM" || node.tagName === "I") {
-    childrenText = `*${childrenText}*`;
+    return `<em>${childrenHtml}</em>`;
   }
 
   if (textColor) {
-    return `[color=${textColor}]${childrenText}[/color]`;
+    return `<span data-color="${textColor}" class="${editorTextColorClasses[textColor]}">${childrenHtml}</span>`;
   }
 
-  return childrenText;
+  return childrenHtml;
 }
 
 function getNodeTextColor(node: HTMLElement): Exclude<BodyTextColor, "default"> | null {
@@ -338,31 +424,38 @@ function getNodeTextColor(node: HTMLElement): Exclude<BodyTextColor, "default"> 
   return rgbToTextColor[styleColor] ?? rgbToTextColor[htmlColorAttribute ?? ""] ?? null;
 }
 
-function serializeEditorBlock(element: HTMLElement): string {
+function serializeEditorBlockAsHtml(element: HTMLElement): string {
   if (element.tagName === "UL" || element.tagName === "OL") {
-    const isOrdered = element.tagName === "OL";
-
-    return Array.from(element.children)
+    const listTag = element.tagName.toLowerCase();
+    const items = Array.from(element.children)
       .filter((child): child is HTMLElement => child instanceof HTMLElement)
-      .map((child, index) => {
-        const prefix = isOrdered ? `${index + 1}. ` : "- ";
-        return `${prefix}${serializeInlineNode(child).replace(/\n/g, " ").trim()}`;
+      .map((child) => {
+        const itemHtml = Array.from(child.childNodes)
+          .map(serializeInlineNodeAsHtml)
+          .join("")
+          .trim();
+
+        return itemHtml ? `<li>${itemHtml}</li>` : "";
       })
-      .join("\n");
+      .filter(Boolean);
+
+    return items.length > 0 ? `<${listTag}>${items.join("")}</${listTag}>` : "";
   }
 
-  const inlineText = Array.from(element.childNodes).map(serializeInlineNode).join("");
-  const normalizedText = inlineText.replace(/\n+$/g, "");
+  const inlineHtml = Array.from(element.childNodes)
+    .map(serializeInlineNodeAsHtml)
+    .join("");
+  const normalizedText = element.textContent ?? "";
 
   if (isBlankEditorBlock(normalizedText)) {
-    return "";
+    return "<p><br></p>";
   }
 
   if (/^H[1-6]$/.test(element.tagName)) {
-    return `## ${normalizedText.trim()}`;
+    return `<h3>${inlineHtml}</h3>`;
   }
 
-  return normalizedText;
+  return `<p>${inlineHtml}</p>`;
 }
 
 function stripEditorColorWrappers(root: ParentNode) {
@@ -383,21 +476,34 @@ function stripEditorColorWrappers(root: ParentNode) {
 }
 
 function editorHtmlToLessonBody(editor: HTMLElement) {
-  return Array.from(editor.childNodes)
+  const html = Array.from(editor.childNodes)
     .map((child) => {
       if (child instanceof HTMLElement) {
-        return serializeEditorBlock(child);
+        return serializeEditorBlockAsHtml(child);
       }
 
-      return serializeInlineNode(child).trim();
+      const inlineHtml = serializeInlineNodeAsHtml(child).trim();
+      return inlineHtml ? `<p>${inlineHtml}</p>` : "";
     })
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
+    .filter(Boolean)
+    .join("")
     .trim();
+
+  return sanitizeLessonBodyHtml(html);
 }
 
 function lessonBodyToPlainText(body: string) {
   return body
+    .replace(/<li(?:\s[^>]*)?>/gi, " ")
+    .replace(/<\/li>/gi, " ")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/?(p|h[1-6]|ul|ol|strong|b|em|i|span)(?:\s[^>]*)?>/gi, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#039;/g, "'")
     .replace(/\[color=(blue|green|red|orange|gray|black)\]([\s\S]*?)\[\/color\]/g, "$2")
     .replace(/(\*\*|__)(.*?)\1/g, "$2")
     .replace(/(\*|_)(.*?)\1/g, "$2")
@@ -1060,7 +1166,7 @@ export default function SlideBuilder({
                 }}
                 onKeyUp={updateBodySelection}
                 onMouseUp={updateBodySelection}
-                className="min-h-[260px] w-full rounded-b-lg border border-slate-300 px-4 py-3 text-sm leading-6 text-slate-900 outline-none focus:border-blue-600 [&:empty:before]:text-slate-400 [&:empty:before]:content-[attr(data-placeholder)]"
+                className="min-h-[260px] w-full rounded-b-lg border border-slate-300 px-4 py-3 text-sm leading-6 text-slate-900 outline-none focus:border-blue-600 [&:empty:before]:text-slate-400 [&:empty:before]:content-[attr(data-placeholder)] [&_li]:pl-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-6 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-6"
               />
             </div>
 

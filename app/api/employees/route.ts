@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAdminContextForUserId } from "@/lib/auth/server";
 import { isAdminRole } from "@/lib/auth/roles";
+import { canAccessEmployee, canAccessLocation, getDataScope } from "@/lib/auth/scope";
 import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
@@ -201,7 +202,7 @@ async function requireAdminContext(request: Request) {
     };
   }
 
-  return { response: null, supabase, profile };
+  return { response: null, supabase, profile, scope: getDataScope(profile) };
 }
 
 function readString(value: unknown) {
@@ -271,33 +272,50 @@ function readEmployeeId(payload: EmployeePayload) {
 }
 
 export async function GET(request: Request) {
-  const { response, supabase, profile } = await requireAdminContext(request);
+  const { response, supabase, profile, scope } = await requireAdminContext(request);
 
   if (response) return response;
 
+  if (!isAdminRole(profile.role)) {
+    return jsonError("You do not have access to employees.", 403);
+  }
+
+  const employeesQuery = supabase
+    .from("profiles")
+    .select("*")
+    .eq("company_id", scope.companyId)
+    .order("last_name", { ascending: true })
+    .order("first_name", { ascending: true });
+  const scopedEmployeesQuery = scope.canAccessAllLocations
+    ? employeesQuery
+    : scope.locationIds.length > 0
+      ? employeesQuery.in("location_id", scope.locationIds)
+      : employeesQuery.limit(0);
+  const locationsQuery = supabase
+    .from("locations")
+    .select("*")
+    .eq("company_id", scope.companyId)
+    .order("store_number", { ascending: true });
+  const scopedLocationsQuery = scope.canAccessAllLocations
+    ? locationsQuery
+    : scope.locationIds.length > 0
+      ? locationsQuery.in("id", scope.locationIds)
+      : locationsQuery.limit(0);
+
   const [employeesResult, locationsResult, positionsResult, companyResult] =
     await Promise.all([
-    supabase
-      .from("profiles")
-      .select("*")
-      .eq("company_id", profile.company_id)
-      .order("last_name", { ascending: true })
-      .order("first_name", { ascending: true }),
-    supabase
-      .from("locations")
-      .select("*")
-      .eq("company_id", profile.company_id)
-      .order("store_number", { ascending: true }),
+    scopedEmployeesQuery,
+    scopedLocationsQuery,
     supabase
       .from("positions")
       .select("*")
-      .eq("company_id", profile.company_id)
+      .eq("company_id", scope.companyId)
       .eq("is_active", true)
       .order("name", { ascending: true }),
     supabase
       .from("companies")
       .select("id,name")
-      .eq("id", profile.company_id)
+      .eq("id", scope.companyId)
       .single(),
   ]);
 
@@ -372,7 +390,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const { response, supabase, profile } = await requireAdminContext(request);
+  const { response, supabase, profile, scope } = await requireAdminContext(request);
 
   if (response) return response;
 
@@ -395,12 +413,26 @@ export async function POST(request: Request) {
     return jsonError("Fix the highlighted fields.", 400, fieldErrors);
   }
 
+  if (scope.isManager && values.role === "admin") {
+    return jsonError("Only admins can assign the admin role.", 403, {
+      role: "Only admins can assign the admin role.",
+    });
+  }
+
+  if (!canAccessLocation(scope, values.locationId)) {
+    return jsonError("Choose a valid location.", 400, {
+      location_id: scope.isManager
+        ? "Managers can only create employees in their assigned location."
+        : "Choose a valid location.",
+    });
+  }
+
   if (values.locationId) {
     const { data: location, error: locationError } = await supabase
       .from("locations")
       .select("id")
       .eq("id", values.locationId)
-      .eq("company_id", profile.company_id)
+      .eq("company_id", scope.companyId)
       .maybeSingle();
 
     if (locationError) {
@@ -420,7 +452,7 @@ export async function POST(request: Request) {
       await supabase
         .from("positions")
         .select("id")
-        .eq("company_id", profile.company_id)
+        .eq("company_id", scope.companyId)
         .eq("is_active", true)
         .in("id", values.positionIds);
 
@@ -500,7 +532,7 @@ export async function POST(request: Request) {
       last_name: values.lastName,
       hire_date: values.hireDate,
       preferred_name: values.preferredName,
-      company_id: profile.company_id,
+      company_id: scope.companyId,
     })
     .select("*")
     .single();
@@ -532,7 +564,7 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const { response, supabase, profile } = await requireAdminContext(request);
+  const { response, supabase, profile, scope } = await requireAdminContext(request);
 
   if (response) return response;
 
@@ -566,9 +598,9 @@ export async function PATCH(request: Request) {
   const { data: existingEmployee, error: existingEmployeeError } =
     await supabase
       .from("profiles")
-      .select("id,company_id,email")
+      .select("id,company_id,email,location_id,role")
       .eq("id", employeeId)
-      .eq("company_id", profile.company_id)
+      .eq("company_id", scope.companyId)
       .maybeSingle();
 
   if (existingEmployeeError) {
@@ -580,12 +612,34 @@ export async function PATCH(request: Request) {
     return jsonError("Employee not found.", 404);
   }
 
+  if (!canAccessEmployee(scope, existingEmployee)) {
+    return jsonError("Employee not found.", 404);
+  }
+
+  if (scope.isManager && existingEmployee.role === "admin") {
+    return jsonError("Employee not found.", 404);
+  }
+
+  if (scope.isManager && values.role === "admin") {
+    return jsonError("Only admins can assign the admin role.", 403, {
+      role: "Only admins can assign the admin role.",
+    });
+  }
+
+  if (!canAccessLocation(scope, values.locationId)) {
+    return jsonError("Choose a valid location.", 400, {
+      location_id: scope.isManager
+        ? "Managers can only assign employees to their assigned location."
+        : "Choose a valid location.",
+    });
+  }
+
   if (values.locationId) {
     const { data: location, error: locationError } = await supabase
       .from("locations")
       .select("id")
       .eq("id", values.locationId)
-      .eq("company_id", profile.company_id)
+      .eq("company_id", scope.companyId)
       .maybeSingle();
 
     if (locationError) {
@@ -606,7 +660,7 @@ export async function PATCH(request: Request) {
     const { data, error: selectedPositionsError } = await supabase
       .from("positions")
       .select("*")
-      .eq("company_id", profile.company_id)
+      .eq("company_id", scope.companyId)
       .eq("is_active", true)
       .in("id", values.positionIds);
 
@@ -646,7 +700,7 @@ export async function PATCH(request: Request) {
     await supabase
       .from("profiles")
       .select("id")
-      .eq("company_id", profile.company_id)
+      .eq("company_id", scope.companyId)
       .eq("employee_number", values.employeeNumber)
       .neq("id", employeeId)
       .limit(1);
@@ -699,7 +753,7 @@ export async function PATCH(request: Request) {
       preferred_name: values.preferredName,
     })
     .eq("id", employeeId)
-    .eq("company_id", profile.company_id)
+    .eq("company_id", scope.companyId)
     .select("*")
     .single();
 
@@ -709,7 +763,7 @@ export async function PATCH(request: Request) {
         "[employees] Auth email updated but profile update failed; employee email may be out of sync",
         {
           employeeId,
-          companyId: profile.company_id,
+          companyId: scope.companyId,
           previousProfileEmail: existingEmployee.email,
           updatedAuthEmail: values.email,
           error: updateError,

@@ -112,6 +112,7 @@ export type TrainingAssignment = {
   latest_score: number | null;
   passed: boolean | null;
   assigned_by: string | null;
+  completion_email_sent_at: string | null;
 };
 
 export type QuizAttempt = {
@@ -355,9 +356,13 @@ export type Database = {
       };
       training_assignments: {
         Row: TrainingAssignment;
-        Insert: Omit<TrainingAssignment, "id" | "assigned_at"> & {
+        Insert: Omit<
+          TrainingAssignment,
+          "id" | "assigned_at" | "completion_email_sent_at"
+        > & {
           id?: string;
           assigned_at?: string;
+          completion_email_sent_at?: string | null;
         };
         Update: Partial<Omit<TrainingAssignment, "id" | "employee_id" | "module_id" | "assigned_by">>;
         Relationships: [
