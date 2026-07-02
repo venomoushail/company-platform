@@ -41,9 +41,9 @@ const orderedListPattern = /^\s*\d+[.)]\s+(.+)$/;
 const headingPattern = /^\s{0,3}#{1,3}\s+(.+)$/;
 const inlineFormatPattern =
   /(\[color=(blue|green|red|orange|gray|black)\][\s\S]+?\[\/color\]|\*\*[^*]+\*\*|\*[^*]+\*|__[^_]+__|_[^_]+_)/g;
-const htmlBlockPattern =
-  /<(h[1-6]|p|ul|ol)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi;
-const htmlListItemPattern = /<li(?:\s[^>]*)?>([\s\S]*?)<\/li>/gi;
+const htmlTagPattern = /<\/?([a-z][a-z0-9]*)([^>]*)>/gi;
+const unsafeHtmlBlockPattern =
+  /<(script|style|iframe|object|embed|link|meta)[^>]*>[\s\S]*?<\/\1>/gi;
 
 type LessonTextColor = "blue" | "green" | "red" | "orange" | "gray" | "black";
 
@@ -55,6 +55,37 @@ const textColorClasses: Record<LessonTextColor, string> = {
   gray: "text-slate-600",
   black: "text-slate-950",
 };
+
+const styleColorValues: Record<string, LessonTextColor> = {
+  "rgb(29, 78, 216)": "blue",
+  "#1d4ed8": "blue",
+  "rgb(21, 128, 61)": "green",
+  "#15803d": "green",
+  "rgb(185, 28, 28)": "red",
+  "#b91c1c": "red",
+  "rgb(194, 65, 12)": "orange",
+  "#c2410c": "orange",
+  "rgb(71, 85, 105)": "gray",
+  "#475569": "gray",
+  "rgb(2, 6, 23)": "black",
+  "#020617": "black",
+};
+
+const allowedRichTextTags = new Set([
+  "p",
+  "br",
+  "strong",
+  "b",
+  "em",
+  "i",
+  "h1",
+  "h2",
+  "h3",
+  "ul",
+  "ol",
+  "li",
+  "span",
+]);
 
 function parseInlineText(text: string): TextToken[] {
   const tokens: TextToken[] = [];
@@ -99,26 +130,26 @@ function parseInlineText(text: string): TextToken[] {
   return tokens.length > 0 ? tokens : [{ type: "text", value: text }];
 }
 
-function decodeHtmlEntities(value: string) {
-  return value
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, "\"")
-    .replace(/&#039;/g, "'");
-}
-
-function stripHtmlTags(value: string) {
-  return decodeHtmlEntities(value.replace(/<[^>]*>/g, "")).trim();
-}
-
 function getHtmlTagColor(attributes: string) {
   const dataColor = attributes.match(
     /\sdata-color=["']?(blue|green|red|orange|gray|black)["']?/i
   )?.[1];
 
   if (dataColor) return dataColor as LessonTextColor;
+
+  const styleColor = attributes.match(
+    /\bcolor\s*:\s*(#[0-9a-f]{6}|rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))/i
+  )?.[1];
+
+  if (styleColor) {
+    const normalizedStyleColor = styleColor
+      .toLowerCase()
+      .replace(/\s*,\s*/g, ", ");
+
+    if (normalizedStyleColor in styleColorValues) {
+      return styleColorValues[normalizedStyleColor];
+    }
+  }
 
   const classColor = attributes.match(
     /\btext-(blue|green|red|orange)-(?:600|700)\b|\btext-slate-(600|950)\b/i
@@ -132,34 +163,27 @@ function getHtmlTagColor(attributes: string) {
   return "black";
 }
 
-function htmlInlineToLessonMarkup(html: string): string {
-  let nextHtml = html.replace(/<br\s*\/?>/gi, "\n");
-  let previousHtml = "";
+function sanitizeRichTextHtml(content: string) {
+  return content
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(unsafeHtmlBlockPattern, "")
+    .replace(htmlTagPattern, (match, rawTagName: string, attributes: string) => {
+      const tagName = rawTagName.toLowerCase();
 
-  while (nextHtml !== previousHtml) {
-    previousHtml = nextHtml;
-    nextHtml = nextHtml
-      .replace(
-        /<(strong|b)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi,
-        (_match, _tag, inner: string) =>
-          `**${htmlInlineToLessonMarkup(inner)}**`
-      )
-      .replace(
-        /<(em|i)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi,
-        (_match, _tag, inner: string) => `*${htmlInlineToLessonMarkup(inner)}*`
-      )
-      .replace(
-        /<span([^>]*)>([\s\S]*?)<\/span>/gi,
-        (_match, attributes: string, inner: string) => {
-          const color = getHtmlTagColor(attributes);
-          const text = htmlInlineToLessonMarkup(inner);
+      if (!allowedRichTextTags.has(tagName)) return "";
+      if (match.startsWith("</")) return tagName === "br" ? "" : `</${tagName}>`;
+      if (tagName === "br") return "<br>";
 
-          return color ? `[color=${color}]${text}[/color]` : text;
-        }
-      );
-  }
+      if (tagName === "span") {
+        const textColor = getHtmlTagColor(attributes);
 
-  return stripHtmlTags(nextHtml);
+        return textColor
+          ? `<span data-color="${textColor}" class="${textColorClasses[textColor]}">`
+          : "<span>";
+      }
+
+      return `<${tagName}>`;
+    });
 }
 
 function renderInlineText(text: string, keyPrefix: string): ReactNode[] {
@@ -274,65 +298,6 @@ function parseLessonContent(content: string): ContentBlock[] {
   return blocks;
 }
 
-function parseHtmlLessonContent(content: string): ContentBlock[] {
-  const blocks: ContentBlock[] = [];
-  let lastIndex = 0;
-
-  function parseLegacyFragment(fragment: string) {
-    const legacyBlocks = parseLessonContent(stripHtmlTags(fragment));
-    blocks.push(...legacyBlocks);
-  }
-
-  content.replace(
-    htmlBlockPattern,
-    (match, tag: string, innerHtml: string, offset: number) => {
-      if (offset > lastIndex) {
-        parseLegacyFragment(content.slice(lastIndex, offset));
-      }
-
-      const normalizedTag = tag.toLowerCase();
-
-      if (normalizedTag === "ul" || normalizedTag === "ol") {
-        const items: string[] = [];
-
-        innerHtml.replace(htmlListItemPattern, (_itemMatch, itemHtml: string) => {
-          const item = htmlInlineToLessonMarkup(itemHtml);
-
-          if (item) items.push(item);
-          return _itemMatch;
-        });
-
-        if (items.length > 0) {
-          blocks.push({
-            type: normalizedTag === "ul" ? "unordered-list" : "ordered-list",
-            items,
-          });
-        }
-      } else {
-        const text = htmlInlineToLessonMarkup(innerHtml);
-
-        if (!text.trim()) {
-          blocks.push({ type: "blank" });
-        } else {
-          blocks.push({
-            type: normalizedTag.startsWith("h") ? "heading" : "paragraph",
-            lines: text.split("\n"),
-          });
-        }
-      }
-
-      lastIndex = offset + match.length;
-      return match;
-    }
-  );
-
-  if (lastIndex < content.length) {
-    parseLegacyFragment(content.slice(lastIndex));
-  }
-
-  return blocks.length > 0 ? blocks : parseLessonContent(stripHtmlTags(content));
-}
-
 export default function LessonContent({
   content = "",
   emptyText = "Slide content will appear here.",
@@ -346,9 +311,16 @@ export default function LessonContent({
     return <p className={emptyClassName}>{emptyText}</p>;
   }
 
-  const blocks = looksLikeHtml(content)
-    ? parseHtmlLessonContent(content)
-    : parseLessonContent(content);
+  if (looksLikeHtml(content)) {
+    return (
+      <div
+        className={`${className} [&_b]:font-bold [&_br]:block [&_em]:italic [&_h1]:text-3xl [&_h1]:font-bold [&_h1]:leading-9 [&_h1]:text-slate-900 [&_h2]:text-2xl [&_h2]:font-bold [&_h2]:leading-8 [&_h2]:text-slate-900 [&_h3]:text-2xl [&_h3]:font-bold [&_h3]:leading-8 [&_h3]:text-slate-900 [&_li]:pl-1 [&_ol]:list-decimal [&_ol]:space-y-2 [&_ol]:pl-7 [&_p:empty]:h-3 [&_strong]:font-bold [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-7 [&_[data-color='black']]:text-slate-950 [&_[data-color='blue']]:text-blue-700 [&_[data-color='gray']]:text-slate-600 [&_[data-color='green']]:text-green-700 [&_[data-color='orange']]:text-orange-700 [&_[data-color='red']]:text-red-700`}
+        dangerouslySetInnerHTML={{ __html: sanitizeRichTextHtml(content) }}
+      />
+    );
+  }
+
+  const blocks = parseLessonContent(content);
 
   return (
     <div className={className}>

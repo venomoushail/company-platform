@@ -138,75 +138,93 @@ function EmployeeShell({
 
   return (
     <main className="min-h-screen bg-slate-100">
-      <div className="flex min-h-screen flex-col lg:flex-row">
+      <div className="flex min-h-screen">
         <aside
-          className="shrink-0 text-[var(--company-accent)] lg:sticky lg:top-0 lg:h-screen lg:w-72"
+          className="relative sticky top-0 h-screen w-20 shrink-0 text-[var(--company-accent)] transition-all duration-300 sm:w-64"
           style={{ background: "var(--company-primary)" }}
         >
           <div className="flex h-full flex-col">
             <div className="border-b border-white/15 p-6">
-              {logoUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={logoUrl}
-                  alt={companyName}
-                  className="max-h-14 max-w-44 object-contain"
-                />
-              ) : (
-                <h1 className="text-xl font-bold">{companyName}</h1>
-              )}
-              <p className="mt-2 text-sm opacity-75">Employee Training</p>
+              <div className="min-w-0">
+                {logoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={logoUrl}
+                    alt={companyName}
+                    className="max-h-12 max-w-10 object-contain sm:max-w-36"
+                  />
+                ) : (
+                  <h1 className="truncate text-xl font-bold">
+                    <span className="sm:hidden">{companyName.slice(0, 2)}</span>
+                    <span className="hidden sm:inline">{companyName}</span>
+                  </h1>
+                )}
+                <p className="mt-1 hidden text-sm opacity-75 sm:block">
+                  Employee Training
+                </p>
+              </div>
             </div>
 
-            <nav className="flex gap-2 overflow-x-auto p-4 lg:block lg:space-y-2">
+            <nav className="space-y-2 p-4">
               {navigation.map((item) => {
                 const Icon = item.icon;
                 const isActive = activeTab === item.key;
 
                 return (
-                  <a
+                  <Link
                     key={item.label}
                     href={item.href}
                     onClick={() => setActiveTab(item.key)}
-                    className={`relative flex min-w-max items-center gap-3 rounded-lg px-4 py-3 text-sm font-semibold transition hover:bg-black/15 lg:min-w-0 ${
+                    className={`relative flex items-center gap-3 rounded-xl px-4 py-3 transition hover:bg-black/15 ${
                       isActive ? "bg-black/15" : ""
                     }`}
                   >
                     {isActive && (
                       <span
-                        className="absolute bottom-0 left-3 right-3 h-1 rounded-full lg:bottom-2 lg:left-0 lg:right-auto lg:top-2 lg:h-auto lg:w-1"
+                        className="absolute left-0 top-2 h-[calc(100%-1rem)] w-1 rounded-full"
                         style={{ background: "var(--company-secondary)" }}
                       />
                     )}
-                    <Icon size={19} strokeWidth={2.3} />
-                    <span>{item.label}</span>
-                  </a>
+                    <Icon size={22} strokeWidth={2} />
+                    <span className="hidden font-medium sm:inline">
+                      {item.label}
+                    </span>
+                  </Link>
                 );
               })}
             </nav>
 
-            <div className="mt-auto border-t border-white/15 p-4">
-              <div className="rounded-lg bg-black/10 p-3">
-                <p className="text-sm font-semibold">
-                  {profile?.preferred_name || profile?.first_name || "Employee"}
-                </p>
-                <p className="mt-0.5 text-xs opacity-75">Training account</p>
+            <div className="absolute bottom-6 left-0 w-full px-4">
+              <div className="rounded-xl border border-white/15 bg-black/10 p-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-black/20 text-lg font-bold">
+                  {(profile?.preferred_name || profile?.first_name || "E")
+                    .slice(0, 1)
+                    .toUpperCase()}
+                </div>
+                <div className="mt-3 hidden sm:block">
+                  <p className="truncate text-sm font-semibold">
+                    {profile?.preferred_name || profile?.first_name || "Employee"}
+                  </p>
+                  <p className="mt-0.5 text-xs opacity-75">Training account</p>
+                </div>
                 {canAccessAdminPortal && (
                   <Link
                     href="/"
-                    className="mt-3 inline-flex items-center gap-2 rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold hover:bg-black/15"
+                    className="mt-3 flex h-9 items-center justify-center gap-2 rounded-lg border border-white/20 px-2 text-xs font-semibold hover:bg-black/15 sm:justify-start sm:px-3"
+                    aria-label="Admin Portal"
                   >
                     <LayoutDashboard size={15} />
-                    Admin Portal
+                    <span className="hidden sm:inline">Admin Portal</span>
                   </Link>
                 )}
                 <button
                   type="button"
                   onClick={handleSignOut}
-                  className="mt-3 inline-flex items-center gap-2 rounded-lg border border-white/20 px-3 py-2 text-xs font-semibold hover:bg-black/15"
+                  className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-white/20 px-2 text-xs font-semibold hover:bg-black/15 sm:justify-start sm:px-3"
+                  aria-label="Sign Out"
                 >
                   <LogOut size={15} />
-                  Sign Out
+                  <span className="hidden sm:inline">Sign Out</span>
                 </button>
               </div>
             </div>
@@ -236,6 +254,9 @@ export default function EmployeeLayout({
   children,
 }: EmployeeLayoutProps) {
   const cachedCompany = useCachedEmployeeCompany();
+  // AdminAuthGuard waits for company data before rendering AppSidebar.
+  // Employee pages render while their page-level training fetch is loading, so
+  // keep the last employee company here instead of briefly reapplying defaults.
   const effectiveCompany = company ?? cachedCompany;
 
   useEffect(() => {

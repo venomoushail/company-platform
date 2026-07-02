@@ -11,6 +11,7 @@ import {
   ChevronRight,
   LogOut,
 } from "lucide-react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCompanyTheme } from "@/components/theme/CompanyThemeProvider";
 
@@ -124,7 +125,7 @@ export default function AppSidebar({
               : pathname.startsWith(item.href);
 
           return (
-            <a
+            <Link
               key={item.label}
               href={item.href}
               className={`relative flex items-center gap-3 rounded-xl px-4 py-3 transition hover:bg-black/15 ${
@@ -144,7 +145,7 @@ export default function AppSidebar({
                   {item.label}
                 </span>
               )}
-            </a>
+            </Link>
           );
         })}
       </nav>

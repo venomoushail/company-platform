@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import EmployeeLayout from "@/components/layout/EmployeeLayout";
 import TrainingViewer from "@/components/training/LessonViewer";
@@ -353,12 +354,12 @@ export default function EmployeeTrainingPage() {
       description={getStatusCopy(trainingStatus, questions.length > 0)}
     >
       <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <a
+        <Link
           href="/employee/dashboard"
           className="text-sm font-semibold text-blue-700 hover:text-blue-800"
         >
           Back to Trainings
-        </a>
+        </Link>
 
         {trainingModule && (
           <p className="text-sm font-medium text-slate-500">
@@ -477,12 +478,12 @@ export default function EmployeeTrainingPage() {
             </p>
           )}
           <div className="mt-6 flex flex-wrap justify-center gap-3">
-            <a
+            <Link
               href="/employee/dashboard"
               className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
               Back to Trainings
-            </a>
+            </Link>
             {!quizResult.passed && canRetakeQuiz && (
               <button
                 type="button"

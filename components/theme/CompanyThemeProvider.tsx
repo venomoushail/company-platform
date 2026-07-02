@@ -52,6 +52,7 @@ const defaultTheme: CompanyThemeContextValue = {
 };
 
 const CompanyThemeContext = createContext<CompanyThemeContextValue>(defaultTheme);
+let lastCompanyThemeSource: CompanyThemeUpdate | null = null;
 
 function normalizeColor(value: string | null | undefined, fallback: string) {
   const color = value?.trim();
@@ -129,7 +130,9 @@ export function CompanyThemeProvider({
 }) {
   const [themeOverride, setThemeOverride] = useState<CompanyThemeSource>(null);
   const activeCompany = themeOverride ?? company;
-  const theme = useMemo(() => buildCompanyTheme(activeCompany), [activeCompany]);
+  const resolvedCompany = activeCompany ?? lastCompanyThemeSource;
+
+  const theme = useMemo(() => buildCompanyTheme(resolvedCompany), [resolvedCompany]);
   const updateCompanyTheme = useCallback((nextCompany: CompanyThemeUpdate) => {
     setThemeOverride(nextCompany);
   }, []);
@@ -140,14 +143,22 @@ export function CompanyThemeProvider({
     }),
     [theme, updateCompanyTheme]
   );
-  const themeStyles = {
-    "--company-primary": theme.primaryColor,
-    "--company-secondary": theme.secondaryColor,
-    "--company-accent": theme.accentColor,
-    "--company-primary-text": theme.primaryTextColor,
-  } as CSSProperties;
+  const themeStyles = resolvedCompany
+    ? ({
+        "--company-primary": theme.primaryColor,
+        "--company-secondary": theme.secondaryColor,
+        "--company-accent": theme.accentColor,
+        "--company-primary-text": theme.primaryTextColor,
+      } as CSSProperties)
+    : undefined;
 
   useEffect(() => {
+    if (!resolvedCompany) return;
+
+    if (activeCompany) {
+      lastCompanyThemeSource = activeCompany;
+    }
+
     document.documentElement.style.setProperty(
       "--company-primary",
       theme.primaryColor
@@ -167,7 +178,7 @@ export function CompanyThemeProvider({
 
     updateFavicon(theme.faviconUrl);
     document.title = `${theme.companyName} Training`;
-  }, [theme]);
+  }, [activeCompany, resolvedCompany, theme]);
 
   return (
     <CompanyThemeContext.Provider value={contextValue}>

@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import EmployeeLayout from "@/components/layout/EmployeeLayout";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import type { Company, Profile, TrainingModule } from "@/types/supabase";
@@ -108,25 +109,22 @@ function isActiveTraining(status: TrainingStatus | undefined) {
   );
 }
 
-export default function EmployeeDashboardPage() {
+function EmployeeDashboardContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [company, setCompany] = useState<EmployeeCompany | null>(null);
   const [modules, setModules] = useState<TrainingModule[]>([]);
   const [statuses, setStatuses] = useState<Record<string, TrainingStatus>>({});
   const [pageStatus, setPageStatus] = useState<PageStatus>("loading");
   const [pageError, setPageError] = useState("");
-  const [showCompletedOnly, setShowCompletedOnly] = useState(false);
-  const [showAccount, setShowAccount] = useState(false);
+  const showCompletedOnly = searchParams.get("status") === "completed";
+  const showAccount = searchParams.get("panel") === "account";
 
   useEffect(() => {
     let isMounted = true;
 
     async function loadAssignedTrainings() {
-      const params = new URLSearchParams(window.location.search);
-      setShowCompletedOnly(params.get("status") === "completed");
-      setShowAccount(params.get("panel") === "account");
-
       const supabase = createBrowserSupabaseClient();
 
       if (!supabase) {
@@ -304,12 +302,12 @@ export default function EmployeeDashboardPage() {
                     </p>
                   )}
 
-                  <a
+                  <Link
                     href={`/employee/training/${module.id}`}
                     className="block rounded-lg bg-blue-600 px-4 py-2 text-center text-sm font-semibold text-white hover:bg-blue-700"
                   >
                     {status?.action_label || "Start Training"}
-                  </a>
+                  </Link>
                 </div>
               </article>
             );
@@ -317,5 +315,13 @@ export default function EmployeeDashboardPage() {
         </section>
       )}
     </EmployeeLayout>
+  );
+}
+
+export default function EmployeeDashboardPage() {
+  return (
+    <Suspense fallback={null}>
+      <EmployeeDashboardContent />
+    </Suspense>
   );
 }
