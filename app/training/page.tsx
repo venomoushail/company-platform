@@ -116,12 +116,20 @@ export default function TrainingPage() {
           </p>
         </div>
 
-        <a
-          href="/training/new"
-          className="company-primary-button rounded-lg px-4 py-2 text-center text-sm font-semibold"
-        >
-          + Add Training
-        </a>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <a
+            href="/training/import"
+            className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Import Training
+          </a>
+          <a
+            href="/training/new"
+            className="company-primary-button rounded-lg px-4 py-2 text-center text-sm font-semibold"
+          >
+            + Add Training
+          </a>
+        </div>
       </div>
 
       {pageError && (

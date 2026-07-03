@@ -65,6 +65,23 @@ export type TrainingModule = {
   updated_at: string;
 };
 
+export type TrainingImportJob = {
+  id: string;
+  company_id: string;
+  uploaded_by: string;
+  file_name: string;
+  file_type: string;
+  file_url: string | null;
+  file_path: string;
+  status: string;
+  raw_text: string | null;
+  generated_json: unknown | null;
+  created_module_id: string | null;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+};
+
 export type TrainingSlide = {
   id: string;
   module_id: string;
@@ -300,6 +317,39 @@ export type Database = {
             columns: ["created_by"];
             isOneToOne: false;
             referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      training_import_jobs: {
+        Row: TrainingImportJob;
+        Insert: Omit<TrainingImportJob, "id" | "created_at"> & {
+          id?: string;
+          created_at?: string;
+        };
+        Update: Partial<
+          Omit<TrainingImportJob, "id" | "company_id" | "uploaded_by" | "created_at">
+        >;
+        Relationships: [
+          {
+            foreignKeyName: "training_import_jobs_company_id_fkey";
+            columns: ["company_id"];
+            isOneToOne: false;
+            referencedRelation: "companies";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "training_import_jobs_uploaded_by_fkey";
+            columns: ["uploaded_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "training_import_jobs_created_module_id_fkey";
+            columns: ["created_module_id"];
+            isOneToOne: false;
+            referencedRelation: "training_modules";
             referencedColumns: ["id"];
           },
         ];
