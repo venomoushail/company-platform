@@ -5,7 +5,10 @@ import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
 } from "@/lib/supabase/admin";
-import { normalizeGeneratedTrainingDraft } from "@/lib/training/importDraft";
+import {
+  normalizeGeneratedTrainingDraft,
+  type GeneratedTrainingDraft,
+} from "@/lib/training/importDraft";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +28,38 @@ function jsonError(message: string, status: number, fieldErrors: FieldErrors = {
 
 function logServerError(message: string, error: unknown) {
   console.error(`[training-imports] ${message}`, error);
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildSlideBody(slide: GeneratedTrainingDraft["slides"][number]) {
+  if (slide.slide_type !== "knowledge_check") return slide.body;
+
+  const answerItems = [
+    ["A", slide.answer_a],
+    ["B", slide.answer_b],
+    ["C", slide.answer_c],
+    ["D", slide.answer_d],
+  ]
+    .map(([label, answer]) => `<li><strong>${label}.</strong> ${escapeHtml(answer)}</li>`)
+    .join("");
+
+  const explanationHtml = slide.explanation
+    ? `<p><strong>Explanation:</strong> ${escapeHtml(slide.explanation)}</p>`
+    : "";
+
+  return `${slide.body}
+<p><strong>Knowledge Check:</strong> ${escapeHtml(slide.question_text)}</p>
+<ul>${answerItems}</ul>
+<p><strong>Correct answer:</strong> ${escapeHtml(slide.correct_answer)}</p>
+${explanationHtml}`.trim();
 }
 
 function validateSupabaseAdminEnv() {
@@ -126,7 +161,7 @@ export async function POST(
     return jsonError("Training import job not found.", 404);
   }
 
-  if (job.created_module_id) {
+  if (job.created_module_id && job.status === "draft_created") {
     return NextResponse.json({
       job,
       moduleId: job.created_module_id,
@@ -143,6 +178,7 @@ export async function POST(
     return jsonError("The generated training draft is missing or malformed.", 400);
   }
 
+  // TODO: Persist learning_objectives when training modules have matching storage.
   const { data: module, error: moduleError } = await supabase
     .from("training_modules")
     .insert({
@@ -174,10 +210,10 @@ export async function POST(
       company_id: profile.company_id,
       slide_order: slide.slide_order,
       title: slide.title,
-      body: slide.body,
+      body: buildSlideBody(slide),
       image_url: null,
-      slide_type: "content",
-      speaker_notes: null,
+      slide_type: slide.slide_type,
+      speaker_notes: slide.coach_note || null,
       estimated_seconds: null,
       is_active: true,
     }))

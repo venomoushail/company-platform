@@ -2,6 +2,14 @@ import { NextResponse } from "next/server";
 import { getAdminContextForUserId } from "@/lib/auth/server";
 import { isAdminRole } from "@/lib/auth/roles";
 import {
+  defaultPromptVersion,
+  getRestaurantTrainingPromptBuilder,
+  getRestaurantTrainingPromptVersion,
+  isGenerationStyle,
+  type GenerationStyle,
+  type PromptVersion,
+} from "@/lib/ai/prompts/restaurantTraining";
+import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
 } from "@/lib/supabase/admin";
@@ -13,6 +21,14 @@ import {
 export const dynamic = "force-dynamic";
 
 type FieldErrors = Partial<Record<string, string>>;
+type GenerateRequestBody = {
+  generationStyle?: unknown;
+  promptVersion?: unknown;
+};
+type GenerationOptions = {
+  generationStyle: GenerationStyle;
+  promptVersion: PromptVersion;
+};
 
 function getBearerToken(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -100,58 +116,6 @@ async function requireAdminContext(request: Request) {
   return { response: null, supabase, profile };
 }
 
-function buildTrainingPrompt(rawText: string) {
-  return `You are an expert instructional designer creating employee training.
-
-Generate a complete editable training draft from the source document.
-
-Rules:
-- Split the material naturally into lessons/slides.
-- Create informative slide titles.
-- Use paragraphs.
-- Use bullet lists where appropriate.
-- Keep each slide approximately 150-250 words.
-- Preserve important information.
-- Remove repetitive wording.
-- Estimate course length in minutes.
-- Create 5-10 quiz questions covering the most important material.
-- Return valid JSON only.
-
-JSON shape:
-{
-  "module": {
-    "title": "",
-    "description": "",
-    "category": "",
-    "estimated_minutes": 20,
-    "passing_score": 80
-  },
-  "slides": [
-    {
-      "slide_order": 1,
-      "title": "",
-      "body": ""
-    }
-  ],
-  "quiz": [
-    {
-      "question_order": 1,
-      "question_text": "",
-      "question_type": "multiple_choice",
-      "answer_a": "",
-      "answer_b": "",
-      "answer_c": "",
-      "answer_d": "",
-      "correct_answer": "A",
-      "explanation": ""
-    }
-  ]
-}
-
-Source document:
-${rawText}`;
-}
-
 function extractResponseText(responseJson: unknown) {
   if (!responseJson || typeof responseJson !== "object") return "";
 
@@ -180,6 +144,34 @@ function extractResponseText(responseJson: unknown) {
     .join("");
 }
 
+function parseGeneratedDraftJson(responseText: string) {
+  if (!responseText.trim()) {
+    throw new Error("OpenAI returned an empty training draft.");
+  }
+
+  try {
+    return JSON.parse(responseText) as unknown;
+  } catch (error) {
+    logServerError("OpenAI returned malformed training JSON", error);
+    throw new Error("OpenAI returned malformed training JSON.");
+  }
+}
+
+async function readGenerationOptions(request: Request): Promise<GenerationOptions> {
+  const requestBody = (await request.json().catch(() => null)) as
+    | GenerateRequestBody
+    | null;
+  const generationStyle = requestBody?.generationStyle;
+  const promptVersion = requestBody?.promptVersion;
+
+  return {
+    generationStyle: isGenerationStyle(generationStyle)
+      ? generationStyle
+      : "standard",
+    promptVersion: getRestaurantTrainingPromptVersion(promptVersion),
+  };
+}
+
 async function updateImportJob(
   supabase: ReturnType<typeof createAdminSupabaseClient>,
   jobId: string,
@@ -205,6 +197,9 @@ export async function POST(
 ) {
   const { jobId } = await context.params;
   const { response, supabase, profile } = await requireAdminContext(request);
+  const { generationStyle, promptVersion } = await readGenerationOptions(request);
+  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  const promptBuilder = getRestaurantTrainingPromptBuilder(promptVersion);
 
   if (response) return response;
 
@@ -236,7 +231,7 @@ export async function POST(
     return jsonError("Extracted text is required before generating training.", 400);
   }
 
-  if (!["text_ready", "draft_ready"].includes(job.status)) {
+  if (!["text_ready", "draft_ready", "draft_created"].includes(job.status)) {
     return jsonError("Generate training after document text is ready.", 400);
   }
 
@@ -263,18 +258,8 @@ export async function POST(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
-        input: [
-          {
-            role: "system",
-            content:
-              "You are an expert instructional designer. Return only valid JSON.",
-          },
-          {
-            role: "user",
-            content: buildTrainingPrompt(job.raw_text),
-          },
-        ],
+        model,
+        input: promptBuilder(job.raw_text, generationStyle),
         text: {
           format: {
             type: "json_schema",
@@ -294,7 +279,7 @@ export async function POST(
     }
 
     const responseText = extractResponseText(responseJson);
-    const parsedJson = JSON.parse(responseText) as unknown;
+    const parsedJson = parseGeneratedDraftJson(responseText);
     const draft = normalizeGeneratedTrainingDraft(parsedJson);
 
     if (!draft) {
@@ -307,7 +292,14 @@ export async function POST(
       profile.company_id,
       {
         status: "draft_ready",
-        generated_json: draft,
+        // TODO: Move generation metadata into a history table if one document needs multiple saved generations.
+        generated_json: {
+          prompt_version: promptVersion || defaultPromptVersion,
+          generation_style: generationStyle,
+          model,
+          generated_at: new Date().toISOString(),
+          draft,
+        },
         error_message: null,
       }
     );

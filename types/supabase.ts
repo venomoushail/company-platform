@@ -71,6 +71,7 @@ export type TrainingImportJob = {
   uploaded_by: string;
   file_name: string;
   file_type: string;
+  file_hash: string | null;
   file_url: string | null;
   file_path: string;
   status: string;

@@ -1,18 +1,32 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, FileText, UploadCloud, XCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import AdminLayout from "@/components/layout/AdminLayout";
+import LessonContent from "@/components/training/LessonContent";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
-import { normalizeGeneratedTrainingDraft } from "@/lib/training/importDraft";
+import {
+  getGeneratedTrainingDraftMetadata,
+  normalizeGeneratedTrainingDraft,
+} from "@/lib/training/importDraft";
 import type { TrainingImportJob } from "@/types/supabase";
 import type { GeneratedTrainingDraft } from "@/lib/training/importDraft";
+import {
+  availablePromptVersions,
+  defaultPromptVersion,
+  type GenerationStyle,
+  type PromptVersion,
+} from "@/lib/ai/prompts/restaurantTraining";
 
 type UploadState = "idle" | "uploading" | "success" | "error";
 
 type ImportJobResponse = {
   job: TrainingImportJob;
+};
+
+type ImportJobsResponse = {
+  jobs: TrainingImportJob[];
 };
 
 type SaveDraftResponse = {
@@ -28,6 +42,13 @@ const generationSteps = [
   "Writing slides...",
   "Generating quiz...",
 ];
+const generationStyleOptions: { value: GenerationStyle; label: string }[] = [
+  { value: "standard", label: "Standard" },
+  { value: "beginner_friendly", label: "Beginner Friendly" },
+  { value: "detailed", label: "Detailed" },
+  { value: "executive_summary", label: "Executive Summary" },
+];
+const promptVersionOptions = [...availablePromptVersions];
 
 function getReadableErrorMessage(data: unknown, fallback: string) {
   if (!data || typeof data !== "object") return fallback;
@@ -84,6 +105,10 @@ function formatStatus(status: string) {
     .join(" ");
 }
 
+function formatSlideType(slideType: string) {
+  return formatStatus(slideType);
+}
+
 function getStatusBadgeClass(status: string) {
   if (status === "draft_ready" || status === "draft_created") {
     return "bg-green-100 text-green-700";
@@ -104,6 +129,17 @@ function getTextPreview(rawText: string | null) {
   if (normalizedText.length <= 700) return normalizedText;
 
   return `${normalizedText.slice(0, 700)}...`;
+}
+
+function toHexString(buffer: ArrayBuffer) {
+  return Array.from(new Uint8Array(buffer))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function getFileHash(file: File) {
+  const digest = await window.crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return toHexString(digest);
 }
 
 function uploadImportFile(file: File, token: string, onProgress: (value: number) => void) {
@@ -153,18 +189,74 @@ function uploadImportFile(file: File, token: string, onProgress: (value: number)
   });
 }
 
+async function fetchImportJobs(token: string) {
+  const response = await fetch("/api/training/imports", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const responseData = (await response.json().catch(() => null)) as
+    | ImportJobsResponse
+    | { error?: string }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(
+      getReadableErrorMessage(responseData, "Unable to load imported documents.")
+    );
+  }
+
+  return (responseData as ImportJobsResponse).jobs;
+}
+
+function getLikelyDuplicateImport(
+  file: File | null,
+  fileHash: string,
+  jobs: TrainingImportJob[]
+) {
+  if (!file) return null;
+
+  const fileName = file.name.trim().toLowerCase();
+  const fileType = getFileExtension(file.name);
+  const hashMatch = fileHash
+    ? jobs.find((job) => job.file_hash && job.file_hash === fileHash)
+    : null;
+
+  if (hashMatch) return hashMatch;
+
+  return (
+    jobs.find(
+      (job) =>
+        job.file_name.trim().toLowerCase() === fileName &&
+        job.file_type.trim().toLowerCase() === fileType
+    ) ?? null
+  );
+}
+
 export default function ImportTrainingPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFileHash, setSelectedFileHash] = useState("");
   const [validationError, setValidationError] = useState("");
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [uploadProgress, setUploadProgress] = useState(0);
   const [message, setMessage] = useState("");
   const [importJob, setImportJob] = useState<TrainingImportJob | null>(null);
+  const [existingImports, setExistingImports] = useState<TrainingImportJob[]>([]);
+  const [importsStatus, setImportsStatus] = useState<UploadState>("idle");
+  const [importsMessage, setImportsMessage] = useState("");
+  const [importSearch, setImportSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [allowDuplicateUpload, setAllowDuplicateUpload] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState("");
   const [generationStatus, setGenerationStatus] = useState<UploadState>("idle");
   const [generationStepIndex, setGenerationStepIndex] = useState(0);
   const [generationMessage, setGenerationMessage] = useState("");
+  const [generationStyle, setGenerationStyle] =
+    useState<GenerationStyle>("standard");
+  const [promptVersion, setPromptVersion] =
+    useState<PromptVersion>(defaultPromptVersion);
   const [saveStatus, setSaveStatus] = useState<UploadState>("idle");
   const [saveMessage, setSaveMessage] = useState("");
 
@@ -174,20 +266,100 @@ export default function ImportTrainingPage() {
     return `${selectedFile.name} (${formatFileSize(selectedFile.size)})`;
   }, [selectedFile]);
 
-  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadInitialImports() {
+      const supabase = createBrowserSupabaseClient();
+
+      if (!supabase) {
+        if (isMounted) {
+          setImportsStatus("error");
+          setImportsMessage("Supabase environment variables are not configured.");
+        }
+        return;
+      }
+
+      const { data, error } = await supabase.auth.getSession();
+
+      if (error || !data.session?.access_token) {
+        if (isMounted) {
+          setImportsStatus("error");
+          setImportsMessage(error?.message || "Sign in to view imported documents.");
+        }
+        return;
+      }
+
+      try {
+        if (isMounted) {
+          setImportsStatus("uploading");
+          setImportsMessage("");
+        }
+        const jobs = await fetchImportJobs(data.session.access_token);
+
+        if (isMounted) {
+          setExistingImports(jobs);
+          setImportsStatus("success");
+        }
+      } catch (error) {
+        if (isMounted) {
+          setImportsStatus("error");
+          setImportsMessage(
+            error instanceof Error ? error.message : "Unable to load imported documents."
+          );
+        }
+      }
+    }
+
+    void loadInitialImports();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  async function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0] ?? null;
     const error = validateFile(file);
 
     setSelectedFile(file);
+    setSelectedFileHash("");
     setValidationError(error);
     setMessage("");
+    setDuplicateWarning("");
+    setAllowDuplicateUpload(false);
     setGenerationMessage("");
     setSaveMessage("");
-    setImportJob(null);
     setUploadState("idle");
     setGenerationStatus("idle");
     setSaveStatus("idle");
     setUploadProgress(0);
+
+    if (!file || error) return;
+
+    try {
+      const fileHash = await getFileHash(file);
+      const likelyDuplicate = getLikelyDuplicateImport(
+        file,
+        fileHash,
+        existingImports
+      );
+
+      setSelectedFileHash(fileHash);
+      setDuplicateWarning(
+        likelyDuplicate
+          ? "This document appears to already exist in your Training Document Library."
+          : ""
+      );
+    } catch {
+      const likelyDuplicate = getLikelyDuplicateImport(file, "", existingImports);
+
+      setDuplicateWarning(
+        likelyDuplicate
+          ? "This document appears to already exist in your Training Document Library."
+          : ""
+      );
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -197,6 +369,22 @@ export default function ImportTrainingPage() {
     if (fileError || !selectedFile) {
       setValidationError(fileError);
       setUploadState("error");
+      return;
+    }
+
+    const fileHash = selectedFileHash || (await getFileHash(selectedFile).catch(() => ""));
+    const likelyDuplicate = getLikelyDuplicateImport(
+      selectedFile,
+      fileHash,
+      existingImports
+    );
+
+    if (likelyDuplicate && !allowDuplicateUpload) {
+      setSelectedFileHash(fileHash);
+      setDuplicateWarning(
+        "This document appears to already exist in your Training Document Library."
+      );
+      setImportJob(likelyDuplicate);
       return;
     }
 
@@ -229,6 +417,7 @@ export default function ImportTrainingPage() {
       );
 
       setImportJob(response.job);
+      updateExistingImportJob(response.job);
       setUploadState(response.job.status === "failed" ? "error" : "success");
       setGenerationStatus("idle");
       setGenerationMessage("");
@@ -243,6 +432,9 @@ export default function ImportTrainingPage() {
             : "Training document uploaded and import job created."
       );
       setSelectedFile(null);
+      setSelectedFileHash("");
+      setDuplicateWarning("");
+      setAllowDuplicateUpload(false);
 
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -273,8 +465,48 @@ export default function ImportTrainingPage() {
     return data.session.access_token;
   }
 
-  async function handleGenerateTraining() {
-    if (!importJob) return;
+  async function loadExistingImportJobs() {
+    setImportsStatus("uploading");
+    setImportsMessage("");
+
+    try {
+      const token = await getAccessToken();
+      const jobs = await fetchImportJobs(token);
+
+      setExistingImports(jobs);
+      setImportsStatus("success");
+    } catch (error) {
+      setImportsStatus("error");
+      setImportsMessage(
+        error instanceof Error ? error.message : "Unable to load imported documents."
+      );
+    }
+  }
+
+  function updateExistingImportJob(job: TrainingImportJob) {
+    setExistingImports((currentJobs) => {
+      const nextJobs = currentJobs.filter((currentJob) => currentJob.id !== job.id);
+      return [job, ...nextJobs].sort(
+        (first, second) =>
+          new Date(second.created_at).getTime() - new Date(first.created_at).getTime()
+      );
+    });
+  }
+
+  function selectImportJob(job: TrainingImportJob) {
+    setImportJob(job);
+    setGenerationMessage("");
+    setSaveMessage("");
+    setGenerationStatus("idle");
+    setSaveStatus("idle");
+  }
+
+  async function handleGenerateTraining(targetJob?: TrainingImportJob) {
+    const jobToGenerate = targetJob ?? importJob;
+
+    if (!jobToGenerate) return;
+
+    setImportJob(jobToGenerate);
 
     setGenerationStatus("uploading");
     setGenerationStepIndex(0);
@@ -290,12 +522,14 @@ export default function ImportTrainingPage() {
     try {
       const token = await getAccessToken();
       const response = await fetch(
-        `/api/training/imports/${encodeURIComponent(importJob.id)}/generate`,
+        `/api/training/imports/${encodeURIComponent(jobToGenerate.id)}/generate`,
         {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
           },
+          body: JSON.stringify({ generationStyle, promptVersion }),
         }
       );
       const responseData = (await response.json().catch(() => null)) as
@@ -309,7 +543,9 @@ export default function ImportTrainingPage() {
         );
       }
 
-      setImportJob((responseData as ImportJobResponse).job);
+      const updatedJob = (responseData as ImportJobResponse).job;
+      setImportJob(updatedJob);
+      updateExistingImportJob(updatedJob);
       setGenerationStatus("success");
       setGenerationMessage("AI draft is ready for review.");
     } catch (error) {
@@ -353,12 +589,64 @@ export default function ImportTrainingPage() {
 
       const saveResponse = responseData as SaveDraftResponse;
       setImportJob(saveResponse.job);
+      updateExistingImportJob(saveResponse.job);
       setSaveStatus("success");
       router.push(`/training/new?id=${encodeURIComponent(saveResponse.moduleId)}`);
     } catch (error) {
       setSaveStatus("error");
       setSaveMessage(
         error instanceof Error ? error.message : "Unable to save the training draft."
+      );
+    }
+  }
+
+  async function handleDeleteImport(job: TrainingImportJob) {
+    if (job.created_module_id) return;
+
+    const confirmed = window.confirm(
+      `Delete ${job.file_name}? This removes the import job and uploaded source file.`
+    );
+
+    if (!confirmed) return;
+
+    setImportsMessage("");
+
+    try {
+      const token = await getAccessToken();
+      const response = await fetch(
+        `/api/training/imports/${encodeURIComponent(job.id)}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+      const responseData = (await response.json().catch(() => null)) as
+        | { success?: boolean }
+        | { error?: string }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(
+          getReadableErrorMessage(responseData, "Unable to delete the import job.")
+        );
+      }
+
+      setExistingImports((currentJobs) =>
+        currentJobs.filter((currentJob) => currentJob.id !== job.id)
+      );
+
+      if (importJob?.id === job.id) {
+        setImportJob(null);
+      }
+
+      setImportsStatus("success");
+      setImportsMessage("Import job deleted.");
+    } catch (error) {
+      setImportsStatus("error");
+      setImportsMessage(
+        error instanceof Error ? error.message : "Unable to delete the import job."
       );
     }
   }
@@ -371,6 +659,33 @@ export default function ImportTrainingPage() {
   const generatedDraft = useMemo<GeneratedTrainingDraft | null>(
     () => normalizeGeneratedTrainingDraft(importJob?.generated_json ?? null),
     [importJob?.generated_json]
+  );
+  const generatedDraftMetadata = useMemo(
+    () => getGeneratedTrainingDraftMetadata(importJob?.generated_json ?? null),
+    [importJob?.generated_json]
+  );
+  const statusOptions = useMemo(
+    () =>
+      Array.from(new Set(existingImports.map((job) => job.status)))
+        .filter(Boolean)
+        .sort(),
+    [existingImports]
+  );
+  const filteredImports = useMemo(() => {
+    const searchTerm = importSearch.trim().toLowerCase();
+
+    return existingImports.filter((job) => {
+      const matchesSearch =
+        !searchTerm || job.file_name.toLowerCase().includes(searchTerm);
+      const matchesStatus = statusFilter === "all" || job.status === statusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [existingImports, importSearch, statusFilter]);
+  const selectedDuplicateImport = getLikelyDuplicateImport(
+    selectedFile,
+    selectedFileHash,
+    existingImports
   );
 
   return (
@@ -395,7 +710,7 @@ export default function ImportTrainingPage() {
             </div>
             <div>
               <h2 className="text-lg font-bold text-slate-900">
-                Upload Training Document
+                Upload New Document
               </h2>
               <p className="mt-1 text-sm text-slate-500">
                 Accepted formats: Word, PDF, and plain text.
@@ -470,6 +785,35 @@ export default function ImportTrainingPage() {
               </div>
             )}
 
+            {duplicateWarning && selectedDuplicateImport && (
+              <div className="rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 text-sm text-yellow-800">
+                <p className="font-semibold">{duplicateWarning}</p>
+                <p className="mt-1">
+                  Existing import: {selectedDuplicateImport.file_name} from{" "}
+                  {formatDateTime(selectedDuplicateImport.created_at)}.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => selectImportJob(selectedDuplicateImport)}
+                    className="rounded-lg border border-yellow-300 bg-white px-3 py-2 text-xs font-semibold text-yellow-900 hover:bg-yellow-100"
+                  >
+                    Use Existing Import
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAllowDuplicateUpload(true);
+                      setDuplicateWarning("");
+                    }}
+                    className="rounded-lg bg-yellow-700 px-3 py-2 text-xs font-semibold text-white hover:bg-yellow-800"
+                  >
+                    Upload Anyway
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <button
                 type="submit"
@@ -489,7 +833,7 @@ export default function ImportTrainingPage() {
         </section>
 
         <aside className="rounded-xl bg-white p-6 shadow-sm">
-          <h2 className="text-lg font-bold text-slate-900">Import Job</h2>
+          <h2 className="text-lg font-bold text-slate-900">Selected Import Job</h2>
           <p className="mt-1 text-sm text-slate-500">
             The next processing steps will run from this saved job record.
           </p>
@@ -561,6 +905,210 @@ export default function ImportTrainingPage() {
         </aside>
       </div>
 
+      <section className="mt-6 rounded-xl bg-white p-6 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">
+              Training Document Library
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Reuse company source documents and extracted text for future training drafts.
+            </p>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <label className="text-sm font-semibold text-slate-700">
+              Search
+              <input
+                value={importSearch}
+                onChange={(event) => setImportSearch(event.target.value)}
+                placeholder="File name"
+                className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-800 shadow-sm sm:w-56"
+              />
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              Status
+              <select
+                value={statusFilter}
+                onChange={(event) => setStatusFilter(event.target.value)}
+                className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm sm:w-44"
+              >
+                <option value="all">All</option>
+                {statusOptions.map((status) => (
+                  <option key={status} value={status}>
+                    {formatStatus(status)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={loadExistingImportJobs}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {importsMessage && (
+          <div
+            className={`mt-5 rounded-lg border px-4 py-3 text-sm font-medium ${
+              importsStatus === "error"
+                ? "border-red-200 bg-red-50 text-red-700"
+                : "border-green-200 bg-green-50 text-green-700"
+            }`}
+          >
+            {importsMessage}
+          </div>
+        )}
+
+        {importsStatus === "uploading" && existingImports.length === 0 ? (
+          <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+            Loading imported documents...
+          </div>
+        ) : filteredImports.length === 0 ? (
+          <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+            No training documents have been imported yet.
+          </div>
+        ) : (
+          <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Document</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3">Extracted Text</th>
+                    <th className="px-4 py-3">AI Metadata</th>
+                    <th className="px-4 py-3">Generated Training</th>
+                    <th className="px-4 py-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 bg-white">
+                  {filteredImports.map((job) => {
+                    const metadata = getGeneratedTrainingDraftMetadata(job.generated_json);
+                    const canGenerate = job.status === "text_ready";
+                    const canReview = job.status === "draft_ready";
+                    const canRegenerate = Boolean(job.generated_json && job.raw_text);
+                    const characterCount = job.raw_text?.length ?? 0;
+
+                    return (
+                      <tr key={job.id} className="align-top">
+                        <td className="px-4 py-4">
+                          <p className="max-w-xs break-words font-semibold text-slate-900">
+                            {job.file_name}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {job.file_type.toUpperCase()} · {formatDateTime(job.created_at)}
+                          </p>
+                        </td>
+                        <td className="px-4 py-4">
+                          <span
+                            className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusBadgeClass(
+                              job.status
+                            )}`}
+                          >
+                            {formatStatus(job.status)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-slate-600">
+                          {characterCount > 0
+                            ? `${characterCount.toLocaleString()} chars`
+                            : "No text"}
+                        </td>
+                        <td className="px-4 py-4 text-slate-600">
+                          {metadata ? (
+                            <div className="space-y-1 text-xs">
+                              <p>Prompt {metadata.prompt_version || "unknown"}</p>
+                              <p>{formatStatus(metadata.generation_style || "standard")}</p>
+                              {metadata.model && <p>{metadata.model}</p>}
+                              {metadata.generated_at && (
+                                <p>{formatDateTime(metadata.generated_at)}</p>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400">None</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-4">
+                          {/* TODO: Support one source document generating many modules. */}
+                          {job.created_module_id ? (
+                            <div className="space-y-2">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                Generated Training
+                              </p>
+                              <a
+                                href={`/training/new?id=${encodeURIComponent(
+                                  job.created_module_id
+                                )}`}
+                                className="inline-flex rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              >
+                                Open Training
+                              </a>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-slate-400">Not created</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => selectImportJob(job)}
+                              className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              View Extracted Text
+                            </button>
+                            {canGenerate && (
+                              <button
+                                type="button"
+                                disabled={isGenerating}
+                                onClick={() => handleGenerateTraining(job)}
+                                className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Generate Training
+                              </button>
+                            )}
+                            {canReview && (
+                              <button
+                                type="button"
+                                onClick={() => selectImportJob(job)}
+                                className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              >
+                                Review AI Draft
+                              </button>
+                            )}
+                            {canRegenerate && (
+                              <button
+                                type="button"
+                                disabled={isGenerating}
+                                onClick={() => handleGenerateTraining(job)}
+                                className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Regenerate
+                              </button>
+                            )}
+                            {!job.created_module_id && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteImport(job)}
+                                className="rounded-lg border border-red-200 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50"
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </section>
+
       {importJob?.status === "text_ready" && (
         <section className="mt-6 rounded-xl bg-white p-6 shadow-sm">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -572,14 +1120,50 @@ export default function ImportTrainingPage() {
                 Use the extracted text to create an editable training draft for review.
               </p>
             </div>
-            <button
-              type="button"
-              disabled={isGenerating}
-              onClick={handleGenerateTraining}
-              className="company-primary-button rounded-lg px-5 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {isGenerating ? "Generating..." : "Generate Training with AI"}
-            </button>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="min-w-56 text-sm font-semibold text-slate-700">
+                Generation Style
+                <select
+                  value={generationStyle}
+                  disabled={isGenerating}
+                  onChange={(event) =>
+                    setGenerationStyle(event.target.value as GenerationStyle)
+                  }
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {generationStyleOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="min-w-36 text-sm font-semibold text-slate-700">
+                Prompt Version
+                <select
+                  value={promptVersion}
+                  disabled={isGenerating}
+                  onChange={(event) =>
+                    setPromptVersion(event.target.value as PromptVersion)
+                  }
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {promptVersionOptions.map((version) => (
+                    <option key={version} value={version}>
+                      {version}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={isGenerating}
+                onClick={() => handleGenerateTraining()}
+                className="company-primary-button rounded-lg px-5 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isGenerating ? "Generating..." : "Generate Training with AI"}
+              </button>
+            </div>
           </div>
 
           {isGenerating && (
@@ -622,12 +1206,17 @@ export default function ImportTrainingPage() {
               <p className="mt-1 text-sm text-slate-500">
                 Review the generated training before saving it as an editable draft.
               </p>
+              {generatedDraftMetadata?.prompt_version && (
+                <p className="mt-2 text-xs font-semibold text-slate-400">
+                  Generated with restaurantTraining {generatedDraftMetadata.prompt_version}
+                </p>
+              )}
             </div>
             <div className="flex flex-col gap-3 sm:flex-row">
               <button
                 type="button"
                 disabled={isGenerating || isSaving}
-                onClick={handleGenerateTraining}
+                onClick={() => handleGenerateTraining()}
                 className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Regenerate
@@ -699,6 +1288,19 @@ export default function ImportTrainingPage() {
             </p>
           </div>
 
+          {generatedDraft.learning_objectives.length > 0 && (
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Learning Objectives
+              </p>
+              <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-700">
+                {generatedDraft.learning_objectives.map((objective, index) => (
+                  <li key={`${objective}-${index}`}>{objective}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="mt-6 grid gap-6 lg:grid-cols-2">
             <div>
               <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">
@@ -710,12 +1312,53 @@ export default function ImportTrainingPage() {
                     key={slide.slide_order}
                     className="rounded-lg border border-slate-200 p-4"
                   >
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                        {formatSlideType(slide.slide_type)}
+                      </span>
+                    </div>
                     <p className="text-sm font-bold text-slate-900">
                       {slide.slide_order}. {slide.title}
                     </p>
-                    <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-slate-600">
-                      {slide.body}
-                    </p>
+                    <div className="mt-2 line-clamp-4">
+                      <LessonContent
+                        content={slide.body}
+                        className="space-y-2 text-sm leading-6 text-slate-600"
+                        emptyClassName="text-sm text-slate-500"
+                        headingClassName="text-sm font-bold leading-6 text-slate-900"
+                      />
+                    </div>
+                    {slide.slide_type === "knowledge_check" && (
+                      <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <p className="text-sm font-semibold text-slate-900">
+                          {slide.question_text}
+                        </p>
+                        <ul className="mt-2 space-y-1 text-sm text-slate-600">
+                          <li>A. {slide.answer_a}</li>
+                          <li>B. {slide.answer_b}</li>
+                          <li>C. {slide.answer_c}</li>
+                          <li>D. {slide.answer_d}</li>
+                        </ul>
+                        <p className="mt-2 text-xs font-semibold text-slate-500">
+                          Correct answer: {slide.correct_answer}
+                        </p>
+                        {slide.explanation && (
+                          <p className="mt-1 text-sm leading-6 text-slate-600">
+                            {slide.explanation}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {slide.coach_note && (
+                      <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Coach Note
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-slate-600">
+                          {slide.coach_note}
+                        </p>
+                      </div>
+                    )}
                   </article>
                 ))}
               </div>

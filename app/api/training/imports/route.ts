@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
 import { getAdminContextForUserId } from "@/lib/auth/server";
@@ -153,6 +154,10 @@ function getReadableExtractionError(error: unknown) {
   return "Unable to extract text from the uploaded document.";
 }
 
+function getSha256Hash(fileBuffer: ArrayBuffer) {
+  return createHash("sha256").update(Buffer.from(fileBuffer)).digest("hex");
+}
+
 async function extractTextFromFile(fileExtension: string, fileBuffer: ArrayBuffer) {
   if (fileExtension === "docx") {
     const result = await mammoth.extractRawText({
@@ -200,6 +205,30 @@ async function updateImportJob(
     .single();
 }
 
+export async function GET(request: Request) {
+  const { response, supabase, profile } = await requireAdminContext(request);
+
+  if (response) return response;
+
+  if (!profile.is_active || !isAdminRole(profile.role)) {
+    return jsonError("Only active admins or managers can view imports.", 403);
+  }
+
+  const { data: jobs, error } = await supabase
+    .from("training_import_jobs")
+    .select("*")
+    .eq("company_id", profile.company_id)
+    .order("created_at", { ascending: false })
+    .limit(100);
+
+  if (error) {
+    logServerError("Training import jobs lookup failed", error);
+    return jsonError("Unable to load imported documents.", 500);
+  }
+
+  return NextResponse.json({ jobs: jobs ?? [] });
+}
+
 export async function POST(request: Request) {
   const { response, supabase, profile } = await requireAdminContext(request);
 
@@ -237,6 +266,7 @@ export async function POST(request: Request) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const filePath = `${profile.company_id}/imports/${timestamp}-${safeFileName}`;
   const fileBuffer = await fileValue.arrayBuffer();
+  const fileHash = getSha256Hash(fileBuffer);
 
   const uploadResult = await supabase.storage
     .from(importBucket)
@@ -262,6 +292,7 @@ export async function POST(request: Request) {
       uploaded_by: profile.id,
       file_name: fileValue.name,
       file_type: fileExtension,
+      file_hash: fileHash,
       file_url: fileUrl,
       file_path: filePath,
       status: "uploaded",

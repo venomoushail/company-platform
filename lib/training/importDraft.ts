@@ -1,3 +1,22 @@
+export type GeneratedSlideType =
+  | "content"
+  | "callout"
+  | "scenario"
+  | "recap"
+  | "knowledge_check"
+  | "reflection";
+
+export type GeneratedTrainingDraftMetadata = {
+  prompt_version: string;
+  generation_style: string;
+  model: string;
+  generated_at: string;
+};
+
+export type GeneratedTrainingDraftRecord = GeneratedTrainingDraftMetadata & {
+  draft: GeneratedTrainingDraft;
+};
+
 export type GeneratedTrainingDraft = {
   module: {
     title: string;
@@ -6,10 +25,20 @@ export type GeneratedTrainingDraft = {
     estimated_minutes: number;
     passing_score: number;
   };
+  learning_objectives: string[];
   slides: {
     slide_order: number;
+    slide_type: GeneratedSlideType;
     title: string;
     body: string;
+    coach_note: string;
+    question_text: string;
+    answer_a: string;
+    answer_b: string;
+    answer_c: string;
+    answer_d: string;
+    correct_answer: "A" | "B" | "C" | "D" | "";
+    explanation: string;
   }[];
   quiz: {
     question_order: number;
@@ -25,11 +54,23 @@ export type GeneratedTrainingDraft = {
 };
 
 const correctAnswers = new Set(["A", "B", "C", "D"]);
+const slideTypes = new Set<GeneratedSlideType>([
+  "content",
+  "callout",
+  "scenario",
+  "recap",
+  "knowledge_check",
+  "reflection",
+]);
+const unsafeHtmlBlockPattern =
+  /<(script|style|iframe|object|embed|link|meta)[^>]*>[\s\S]*?<\/\1>/gi;
+const htmlTagPattern = /<\/?([a-z][a-z0-9]*)[^>]*>/gi;
+const allowedAiHtmlTags = new Set(["p", "strong", "em", "ul", "ol", "li", "br"]);
 
 export const generatedTrainingDraftSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["module", "slides", "quiz"],
+  required: ["module", "learning_objectives", "slides", "quiz"],
   properties: {
     module: {
       type: "object",
@@ -49,24 +90,61 @@ export const generatedTrainingDraftSchema = {
         passing_score: { type: "integer", minimum: 0, maximum: 100 },
       },
     },
+    learning_objectives: {
+      type: "array",
+      minItems: 1,
+      items: { type: "string" },
+    },
     slides: {
       type: "array",
       minItems: 1,
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["slide_order", "title", "body"],
+        required: [
+          "slide_order",
+          "slide_type",
+          "title",
+          "body",
+          "coach_note",
+          "question_text",
+          "answer_a",
+          "answer_b",
+          "answer_c",
+          "answer_d",
+          "correct_answer",
+          "explanation",
+        ],
         properties: {
           slide_order: { type: "integer", minimum: 1 },
+          slide_type: {
+            type: "string",
+            enum: [
+              "content",
+              "callout",
+              "scenario",
+              "recap",
+              "knowledge_check",
+              "reflection",
+            ],
+          },
           title: { type: "string" },
           body: { type: "string" },
+          coach_note: { type: "string" },
+          question_text: { type: "string" },
+          answer_a: { type: "string" },
+          answer_b: { type: "string" },
+          answer_c: { type: "string" },
+          answer_d: { type: "string" },
+          correct_answer: { type: "string", enum: ["A", "B", "C", "D", ""] },
+          explanation: { type: "string" },
         },
       },
     },
     quiz: {
       type: "array",
-      minItems: 5,
-      maxItems: 10,
+      minItems: 3,
+      maxItems: 15,
       items: {
         type: "object",
         additionalProperties: false,
@@ -103,6 +181,34 @@ function readObject(value: unknown) {
     : null;
 }
 
+function getDraftPayload(value: unknown) {
+  const root = readObject(value);
+  if (!root) return null;
+
+  return readObject(root.draft) ?? root;
+}
+
+export function getGeneratedTrainingDraftMetadata(
+  value: unknown
+): GeneratedTrainingDraftMetadata | null {
+  const root = readObject(value);
+  if (!root || !readObject(root.draft)) return null;
+
+  const promptVersion = readString(root.prompt_version);
+  const generationStyle = readString(root.generation_style);
+  const model = readString(root.model);
+  const generatedAt = readString(root.generated_at);
+
+  if (!promptVersion && !generationStyle && !model && !generatedAt) return null;
+
+  return {
+    prompt_version: promptVersion,
+    generation_style: generationStyle,
+    model,
+    generated_at: generatedAt,
+  };
+}
+
 function readString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -115,10 +221,26 @@ function readInteger(value: unknown, fallback: number) {
   return Math.trunc(numberValue);
 }
 
+function sanitizeAiSlideHtml(value: string) {
+  return value
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(unsafeHtmlBlockPattern, "")
+    .replace(htmlTagPattern, (match, rawTagName: string) => {
+      const tagName = rawTagName.toLowerCase();
+
+      if (!allowedAiHtmlTags.has(tagName)) return "";
+      if (match.startsWith("</")) return tagName === "br" ? "" : `</${tagName}>`;
+      if (tagName === "br") return "<br>";
+
+      return `<${tagName}>`;
+    })
+    .trim();
+}
+
 export function normalizeGeneratedTrainingDraft(
   value: unknown
 ): GeneratedTrainingDraft | null {
-  const root = readObject(value);
+  const root = getDraftPayload(value);
   if (!root) return null;
 
   const moduleDraft = readObject(root.module);
@@ -132,6 +254,10 @@ export function normalizeGeneratedTrainingDraft(
 
   if (!title) return null;
 
+  const learningObjectives = Array.isArray(root.learning_objectives)
+    ? root.learning_objectives.map(readString).filter(Boolean)
+    : [];
+
   const slides = Array.isArray(root.slides)
     ? root.slides
         .map((slide, index) => {
@@ -139,14 +265,41 @@ export function normalizeGeneratedTrainingDraft(
           if (!slideObject) return null;
 
           const slideTitle = readString(slideObject.title);
-          const body = readString(slideObject.body);
+          const body = sanitizeAiSlideHtml(readString(slideObject.body));
+          const slideType = readString(slideObject.slide_type);
+          const correctAnswer = readString(slideObject.correct_answer).toUpperCase();
 
-          if (!slideTitle || !body) return null;
+          if (!slideTitle || !body || !slideTypes.has(slideType as GeneratedSlideType)) {
+            return null;
+          }
+
+          if (
+            slideType === "knowledge_check" &&
+            (!readString(slideObject.question_text) ||
+              !readString(slideObject.answer_a) ||
+              !readString(slideObject.answer_b) ||
+              !readString(slideObject.answer_c) ||
+              !readString(slideObject.answer_d) ||
+              !correctAnswers.has(correctAnswer))
+          ) {
+            return null;
+          }
 
           return {
             slide_order: readInteger(slideObject.slide_order, index + 1),
+            slide_type: slideType as GeneratedSlideType,
             title: slideTitle,
             body,
+            coach_note: readString(slideObject.coach_note),
+            question_text: readString(slideObject.question_text),
+            answer_a: readString(slideObject.answer_a),
+            answer_b: readString(slideObject.answer_b),
+            answer_c: readString(slideObject.answer_c),
+            answer_d: readString(slideObject.answer_d),
+            correct_answer: correctAnswers.has(correctAnswer)
+              ? (correctAnswer as GeneratedTrainingDraft["slides"][number]["correct_answer"])
+              : "",
+            explanation: readString(slideObject.explanation),
           };
         })
         .filter((slide): slide is GeneratedTrainingDraft["slides"][number] =>
@@ -203,6 +356,7 @@ export function normalizeGeneratedTrainingDraft(
       estimated_minutes: Math.max(1, estimatedMinutes),
       passing_score: Math.min(100, Math.max(0, passingScore)),
     },
+    learning_objectives: learningObjectives,
     slides: slides.map((slide, index) => ({
       ...slide,
       slide_order: index + 1,
