@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
 import { getAdminContextForUserId } from "@/lib/auth/server";
 import { isAdminRole } from "@/lib/auth/roles";
 import {
@@ -19,9 +19,20 @@ const allowedMimeTypes = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "text/plain",
 ]);
+const pdfExtractionErrorMessage =
+  "PDF text extraction failed. This may be a scanned PDF or unsupported PDF format.";
+const require = createRequire(import.meta.url);
 
 type FieldErrors = Partial<Record<string, string>>;
 type ExtractionStatus = "extracting" | "text_ready" | "failed";
+type PdfParseModule = typeof import("pdf-parse");
+
+class PdfTextExtractionError extends Error {
+  constructor() {
+    super(pdfExtractionErrorMessage);
+    this.name = "PdfTextExtractionError";
+  }
+}
 
 function getBearerToken(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -147,6 +158,10 @@ function validateImportFile(file: File) {
 }
 
 function getReadableExtractionError(error: unknown) {
+  if (error instanceof PdfTextExtractionError) {
+    return pdfExtractionErrorMessage;
+  }
+
   if (error instanceof Error && error.message) {
     return error.message;
   }
@@ -156,6 +171,35 @@ function getReadableExtractionError(error: unknown) {
 
 function getSha256Hash(fileBuffer: ArrayBuffer) {
   return createHash("sha256").update(Buffer.from(fileBuffer)).digest("hex");
+}
+
+async function extractTextFromPdf(fileBuffer: ArrayBuffer) {
+  let parser: InstanceType<PdfParseModule["PDFParse"]> | null = null;
+
+  try {
+    const { PDFParse } = require("pdf-parse") as PdfParseModule;
+
+    parser = new PDFParse({
+      data: new Uint8Array(fileBuffer),
+      useWorkerFetch: false,
+      isEvalSupported: false,
+    });
+
+    const result = await parser.getText({ pageJoiner: "\n\n" });
+    const text = result.text.trim();
+
+    if (!text) {
+      // TODO: Scanned PDFs may need OCR later.
+      throw new PdfTextExtractionError();
+    }
+
+    return text;
+  } catch (error) {
+    logServerError("PDF text extraction failed", error);
+    throw new PdfTextExtractionError();
+  } finally {
+    await parser?.destroy();
+  }
 }
 
 async function extractTextFromFile(fileExtension: string, fileBuffer: ArrayBuffer) {
@@ -172,14 +216,7 @@ async function extractTextFromFile(fileExtension: string, fileBuffer: ArrayBuffe
   }
 
   if (fileExtension === "pdf") {
-    const parser = new PDFParse({ data: Buffer.from(fileBuffer) });
-
-    try {
-      const result = await parser.getText();
-      return result.text.trim();
-    } finally {
-      await parser.destroy();
-    }
+    return extractTextFromPdf(fileBuffer);
   }
 
   return "";

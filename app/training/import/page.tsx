@@ -10,6 +10,7 @@ import {
   getGeneratedTrainingDraftMetadata,
   normalizeGeneratedTrainingDraft,
 } from "@/lib/training/importDraft";
+import { getGeneratedCurriculumRecord } from "@/lib/training/curriculumBuilder";
 import type { TrainingImportJob } from "@/types/supabase";
 import type { GeneratedTrainingDraft } from "@/lib/training/importDraft";
 import {
@@ -20,6 +21,7 @@ import {
 } from "@/lib/ai/prompts/restaurantTraining";
 
 type UploadState = "idle" | "uploading" | "success" | "error";
+type ImportMode = "single" | "library";
 
 type ImportJobResponse = {
   job: TrainingImportJob;
@@ -34,6 +36,11 @@ type SaveDraftResponse = {
   moduleId: string;
 };
 
+type GenerateSelectedTrainingsResponse = {
+  job: TrainingImportJob;
+  modules: { id: string; title: string }[];
+};
+
 const maxFileSizeBytes = 10 * 1024 * 1024;
 const allowedExtensions = new Set(["docx", "pdf", "txt"]);
 const generationSteps = [
@@ -41,6 +48,16 @@ const generationSteps = [
   "Creating lesson outline...",
   "Writing slides...",
   "Generating quiz...",
+];
+const curriculumGenerationSteps = [
+  "Analyzing handbook...",
+  "Finding training topics...",
+  "Building curriculum outline...",
+];
+const selectedTrainingGenerationSteps = [
+  "Generating selected trainings...",
+  "Writing draft modules...",
+  "Saving slides and quizzes...",
 ];
 const generationStyleOptions: { value: GenerationStyle; label: string }[] = [
   { value: "standard", label: "Standard" },
@@ -110,12 +127,24 @@ function formatSlideType(slideType: string) {
 }
 
 function getStatusBadgeClass(status: string) {
-  if (status === "draft_ready" || status === "draft_created") {
+  if (
+    status === "draft_ready" ||
+    status === "draft_created" ||
+    status === "curriculum_ready" ||
+    status === "modules_created"
+  ) {
     return "bg-green-100 text-green-700";
   }
   if (status === "text_ready") return "bg-green-100 text-green-700";
-  if (status === "failed") return "bg-red-100 text-red-700";
-  if (status === "extracting" || status === "generating") {
+  if (status === "failed" || status === "curriculum_failed") {
+    return "bg-red-100 text-red-700";
+  }
+  if (
+    status === "extracting" ||
+    status === "generating" ||
+    status === "curriculum_generating" ||
+    status === "modules_generating"
+  ) {
     return "bg-yellow-100 text-yellow-700";
   }
 
@@ -253,6 +282,14 @@ export default function ImportTrainingPage() {
   const [generationStatus, setGenerationStatus] = useState<UploadState>("idle");
   const [generationStepIndex, setGenerationStepIndex] = useState(0);
   const [generationMessage, setGenerationMessage] = useState("");
+  const [generationStepLabels, setGenerationStepLabels] = useState(generationSteps);
+  const [importMode, setImportMode] = useState<ImportMode>("single");
+  const [selectedCurriculumModules, setSelectedCurriculumModules] = useState<number[]>(
+    []
+  );
+  const [createdCurriculumModules, setCreatedCurriculumModules] = useState<
+    { id: string; title: string }[]
+  >([]);
   const [generationStyle, setGenerationStyle] =
     useState<GenerationStyle>("standard");
   const [promptVersion, setPromptVersion] =
@@ -494,11 +531,23 @@ export default function ImportTrainingPage() {
   }
 
   function selectImportJob(job: TrainingImportJob) {
+    const curriculumRecord = getGeneratedCurriculumRecord(job.generated_json);
+
     setImportJob(job);
     setGenerationMessage("");
     setSaveMessage("");
     setGenerationStatus("idle");
     setSaveStatus("idle");
+    setCreatedCurriculumModules([]);
+
+    if (curriculumRecord) {
+      setImportMode("library");
+      setSelectedCurriculumModules(
+        curriculumRecord.curriculum.recommended_modules.map(
+          (module) => module.module_order
+        )
+      );
+    }
   }
 
   async function handleGenerateTraining(targetJob?: TrainingImportJob) {
@@ -510,6 +559,7 @@ export default function ImportTrainingPage() {
 
     setGenerationStatus("uploading");
     setGenerationStepIndex(0);
+    setGenerationStepLabels(generationSteps);
     setGenerationMessage("");
     setSaveMessage("");
 
@@ -559,6 +609,158 @@ export default function ImportTrainingPage() {
     }
   }
 
+  async function handleDetectCurriculum(targetJob?: TrainingImportJob) {
+    const jobToGenerate = targetJob ?? importJob;
+
+    if (!jobToGenerate) return;
+
+    setImportJob(jobToGenerate);
+    setImportMode("library");
+    setGenerationStatus("uploading");
+    setGenerationStepIndex(0);
+    setGenerationStepLabels(curriculumGenerationSteps);
+    setGenerationMessage("");
+    setSaveMessage("");
+    setCreatedCurriculumModules([]);
+
+    let currentStep = 0;
+    const progressTimer = window.setInterval(() => {
+      currentStep = Math.min(currentStep + 1, curriculumGenerationSteps.length - 1);
+      setGenerationStepIndex(currentStep);
+    }, 1800);
+
+    try {
+      const token = await getAccessToken();
+      const response = await fetch(
+        `/api/training/imports/${encodeURIComponent(
+          jobToGenerate.id
+        )}/detect-curriculum`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ generationStyle }),
+        }
+      );
+      const responseData = (await response.json().catch(() => null)) as
+        | ImportJobResponse
+        | { error?: string }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(
+          getReadableErrorMessage(responseData, "Unable to detect curriculum.")
+        );
+      }
+
+      const updatedJob = (responseData as ImportJobResponse).job;
+      const curriculumRecord = getGeneratedCurriculumRecord(updatedJob.generated_json);
+
+      setImportJob(updatedJob);
+      updateExistingImportJob(updatedJob);
+      setSelectedCurriculumModules(
+        curriculumRecord?.curriculum.recommended_modules.map(
+          (module) => module.module_order
+        ) ?? []
+      );
+      setGenerationStatus("success");
+      setGenerationMessage("AI curriculum outline is ready for review.");
+    } catch (error) {
+      setGenerationStatus("error");
+      setGenerationMessage(
+        error instanceof Error ? error.message : "Unable to detect curriculum."
+      );
+    } finally {
+      window.clearInterval(progressTimer);
+      setGenerationStepIndex(curriculumGenerationSteps.length - 1);
+    }
+  }
+
+  function toggleCurriculumModule(moduleOrder: number) {
+    setSelectedCurriculumModules((currentOrders) =>
+      currentOrders.includes(moduleOrder)
+        ? currentOrders.filter((order) => order !== moduleOrder)
+        : [...currentOrders, moduleOrder].sort((first, second) => first - second)
+    );
+  }
+
+  async function handleGenerateSelectedTrainings() {
+    if (!importJob || selectedCurriculumModules.length === 0) return;
+
+    setSaveStatus("uploading");
+    setGenerationStepIndex(0);
+    setGenerationStepLabels(selectedTrainingGenerationSteps);
+    setSaveMessage("");
+    setGenerationMessage("");
+    setCreatedCurriculumModules([]);
+
+    let currentStep = 0;
+    const progressTimer = window.setInterval(() => {
+      currentStep = Math.min(
+        currentStep + 1,
+        selectedTrainingGenerationSteps.length - 1
+      );
+      setGenerationStepIndex(currentStep);
+    }, 2200);
+
+    try {
+      const token = await getAccessToken();
+      const response = await fetch(
+        `/api/training/imports/${encodeURIComponent(
+          importJob.id
+        )}/generate-selected-trainings`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            selectedModuleOrders: selectedCurriculumModules,
+            generationStyle,
+            promptVersion,
+          }),
+        }
+      );
+      const responseData = (await response.json().catch(() => null)) as
+        | GenerateSelectedTrainingsResponse
+        | { error?: string }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(
+          getReadableErrorMessage(
+            responseData,
+            "Unable to generate selected trainings."
+          )
+        );
+      }
+
+      const selectedResponse = responseData as GenerateSelectedTrainingsResponse;
+      setImportJob(selectedResponse.job);
+      updateExistingImportJob(selectedResponse.job);
+      setCreatedCurriculumModules(selectedResponse.modules);
+      setSaveStatus("success");
+      setSaveMessage(
+        `${selectedResponse.modules.length} draft training module${
+          selectedResponse.modules.length === 1 ? "" : "s"
+        } created.`
+      );
+    } catch (error) {
+      setSaveStatus("error");
+      setSaveMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to generate selected trainings."
+      );
+    } finally {
+      window.clearInterval(progressTimer);
+      setGenerationStepIndex(selectedTrainingGenerationSteps.length - 1);
+    }
+  }
+
   async function handleSaveDraft() {
     if (!importJob) return;
 
@@ -601,7 +803,7 @@ export default function ImportTrainingPage() {
   }
 
   async function handleDeleteImport(job: TrainingImportJob) {
-    if (job.created_module_id) return;
+    if (job.created_module_id || job.status === "modules_created") return;
 
     const confirmed = window.confirm(
       `Delete ${job.file_name}? This removes the import job and uploaded source file.`
@@ -662,6 +864,10 @@ export default function ImportTrainingPage() {
   );
   const generatedDraftMetadata = useMemo(
     () => getGeneratedTrainingDraftMetadata(importJob?.generated_json ?? null),
+    [importJob?.generated_json]
+  );
+  const generatedCurriculumRecord = useMemo(
+    () => getGeneratedCurriculumRecord(importJob?.generated_json ?? null),
     [importJob?.generated_json]
   );
   const statusOptions = useMemo(
@@ -987,8 +1193,14 @@ export default function ImportTrainingPage() {
                 <tbody className="divide-y divide-slate-200 bg-white">
                   {filteredImports.map((job) => {
                     const metadata = getGeneratedTrainingDraftMetadata(job.generated_json);
+                    const curriculumMetadata = getGeneratedCurriculumRecord(
+                      job.generated_json
+                    );
                     const canGenerate = job.status === "text_ready";
                     const canReview = job.status === "draft_ready";
+                    const canReviewCurriculum =
+                      job.status === "curriculum_ready" ||
+                      job.status === "modules_created";
                     const canRegenerate = Boolean(job.generated_json && job.raw_text);
                     const characterCount = job.raw_text?.length ?? 0;
 
@@ -1017,7 +1229,18 @@ export default function ImportTrainingPage() {
                             : "No text"}
                         </td>
                         <td className="px-4 py-4 text-slate-600">
-                          {metadata ? (
+                          {curriculumMetadata ? (
+                            <div className="space-y-1 text-xs">
+                              <p>curriculumBuilder {curriculumMetadata.prompt_version || "v1"}</p>
+                              <p>
+                                {curriculumMetadata.curriculum.recommended_modules.length} modules
+                              </p>
+                              {curriculumMetadata.model && <p>{curriculumMetadata.model}</p>}
+                              {curriculumMetadata.generated_at && (
+                                <p>{formatDateTime(curriculumMetadata.generated_at)}</p>
+                              )}
+                            </div>
+                          ) : metadata ? (
                             <div className="space-y-1 text-xs">
                               <p>Prompt {metadata.prompt_version || "unknown"}</p>
                               <p>{formatStatus(metadata.generation_style || "standard")}</p>
@@ -1031,8 +1254,26 @@ export default function ImportTrainingPage() {
                           )}
                         </td>
                         <td className="px-4 py-4">
-                          {/* TODO: Support one source document generating many modules. */}
-                          {job.created_module_id ? (
+                          {curriculumMetadata?.created_module_ids?.length ? (
+                            <div className="space-y-2">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                Created Modules
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                {curriculumMetadata.created_module_ids.map(
+                                  (moduleId, index) => (
+                                    <a
+                                      key={moduleId}
+                                      href={`/training/new?id=${encodeURIComponent(moduleId)}`}
+                                      className="inline-flex rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                    >
+                                      Open {index + 1}
+                                    </a>
+                                  )
+                                )}
+                              </div>
+                            </div>
+                          ) : job.created_module_id ? (
                             <div className="space-y-2">
                               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                                 Generated Training
@@ -1069,6 +1310,16 @@ export default function ImportTrainingPage() {
                                 Generate Training
                               </button>
                             )}
+                            {canGenerate && (
+                              <button
+                                type="button"
+                                disabled={isGenerating}
+                                onClick={() => handleDetectCurriculum(job)}
+                                className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Build Library
+                              </button>
+                            )}
                             {canReview && (
                               <button
                                 type="button"
@@ -1078,17 +1329,32 @@ export default function ImportTrainingPage() {
                                 Review AI Draft
                               </button>
                             )}
+                            {canReviewCurriculum && (
+                              <button
+                                type="button"
+                                onClick={() => selectImportJob(job)}
+                                className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                              >
+                                Review Curriculum
+                              </button>
+                            )}
                             {canRegenerate && (
                               <button
                                 type="button"
                                 disabled={isGenerating}
-                                onClick={() => handleGenerateTraining(job)}
+                                onClick={() =>
+                                  curriculumMetadata
+                                    ? handleDetectCurriculum(job)
+                                    : handleGenerateTraining(job)
+                                }
                                 className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                               >
                                 Regenerate
                               </button>
                             )}
-                            {!job.created_module_id && (
+                            {!job.created_module_id &&
+                              job.status !== "modules_created" &&
+                              !curriculumMetadata?.created_module_ids?.length && (
                               <button
                                 type="button"
                                 onClick={() => handleDeleteImport(job)}
@@ -1114,13 +1380,25 @@ export default function ImportTrainingPage() {
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-lg font-bold text-slate-900">
-                Generate Training Draft
+                Generate from Import
               </h2>
               <p className="mt-1 text-sm text-slate-500">
-                Use the extracted text to create an editable training draft for review.
+                Choose whether to create one training or detect a training library.
               </p>
             </div>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="min-w-56 text-sm font-semibold text-slate-700">
+                Import Mode
+                <select
+                  value={importMode}
+                  disabled={isGenerating}
+                  onChange={(event) => setImportMode(event.target.value as ImportMode)}
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <option value="single">Single Training</option>
+                  <option value="library">Build Training Library</option>
+                </select>
+              </label>
               <label className="min-w-56 text-sm font-semibold text-slate-700">
                 Generation Style
                 <select
@@ -1138,30 +1416,42 @@ export default function ImportTrainingPage() {
                   ))}
                 </select>
               </label>
-              <label className="min-w-36 text-sm font-semibold text-slate-700">
-                Prompt Version
-                <select
-                  value={promptVersion}
-                  disabled={isGenerating}
-                  onChange={(event) =>
-                    setPromptVersion(event.target.value as PromptVersion)
-                  }
-                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {promptVersionOptions.map((version) => (
-                    <option key={version} value={version}>
-                      {version}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              {importMode === "single" && (
+                <label className="min-w-36 text-sm font-semibold text-slate-700">
+                  Prompt Version
+                  <select
+                    value={promptVersion}
+                    disabled={isGenerating}
+                    onChange={(event) =>
+                      setPromptVersion(event.target.value as PromptVersion)
+                    }
+                    className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {promptVersionOptions.map((version) => (
+                      <option key={version} value={version}>
+                        {version}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <button
                 type="button"
                 disabled={isGenerating}
-                onClick={() => handleGenerateTraining()}
+                onClick={() =>
+                  importMode === "single"
+                    ? handleGenerateTraining()
+                    : handleDetectCurriculum()
+                }
                 className="company-primary-button rounded-lg px-5 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isGenerating ? "Generating..." : "Generate Training with AI"}
+                {isGenerating
+                  ? importMode === "single"
+                    ? "Generating..."
+                    : "Analyzing..."
+                  : importMode === "single"
+                    ? "Generate Training with AI"
+                    : "Build Training Library"}
               </button>
             </div>
           </div>
@@ -1169,13 +1459,13 @@ export default function ImportTrainingPage() {
           {isGenerating && (
             <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="text-sm font-semibold text-slate-900">
-                {generationSteps[generationStepIndex]}
+                {generationStepLabels[generationStepIndex]}
               </p>
               <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
                 <div
                   className="h-full rounded-full bg-[var(--company-secondary)] transition-all"
                   style={{
-                    width: `${((generationStepIndex + 1) / generationSteps.length) * 100}%`,
+                    width: `${((generationStepIndex + 1) / generationStepLabels.length) * 100}%`,
                   }}
                 />
               </div>
@@ -1195,6 +1485,230 @@ export default function ImportTrainingPage() {
           )}
         </section>
       )}
+
+      {(importJob?.status === "curriculum_ready" ||
+        importJob?.status === "modules_created") &&
+        generatedCurriculumRecord && (
+          <section className="mt-6 rounded-xl bg-white p-6 shadow-sm">
+            <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">
+                  AI Curriculum Review
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Review suggested modules before generating draft trainings.
+                </p>
+                <p className="mt-2 text-xs font-semibold text-slate-400">
+                  Generated with curriculumBuilder{" "}
+                  {generatedCurriculumRecord.prompt_version || "v1"}
+                </p>
+              </div>
+              <div className="flex flex-col gap-3 sm:flex-row">
+                <button
+                  type="button"
+                  disabled={isGenerating || isSaving}
+                  onClick={() => handleDetectCurriculum()}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Regenerate Curriculum
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    isGenerating || isSaving || selectedCurriculumModules.length === 0
+                  }
+                  onClick={handleGenerateSelectedTrainings}
+                  className="company-primary-button rounded-lg px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isSaving ? "Generating..." : "Generate Selected Trainings"}
+                </button>
+                <a
+                  href="/training"
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-center text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </a>
+              </div>
+            </div>
+
+            {generationMessage && (
+              <div
+                className={`mb-6 rounded-lg border px-4 py-3 text-sm font-medium ${
+                  generationStatus === "error"
+                    ? "border-red-200 bg-red-50 text-red-700"
+                    : "border-green-200 bg-green-50 text-green-700"
+                }`}
+              >
+                {generationMessage}
+              </div>
+            )}
+
+            {saveMessage && (
+              <div
+                className={`mb-6 rounded-lg border px-4 py-3 text-sm font-medium ${
+                  saveStatus === "success"
+                    ? "border-green-200 bg-green-50 text-green-700"
+                    : "border-red-200 bg-red-50 text-red-700"
+                }`}
+              >
+                {saveMessage}
+                {createdCurriculumModules.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {createdCurriculumModules.map((module) => (
+                      <a
+                        key={module.id}
+                        href={`/training/new?id=${encodeURIComponent(module.id)}`}
+                        className="rounded-lg border border-green-300 bg-white px-3 py-2 text-xs font-semibold text-green-800 hover:bg-green-50"
+                      >
+                        Open {module.title}
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {isSaving && (
+              <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-900">
+                  {generationStepLabels[generationStepIndex]}
+                </p>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
+                  <div
+                    className="h-full rounded-full bg-[var(--company-secondary)] transition-all"
+                    style={{
+                      width: `${((generationStepIndex + 1) / generationStepLabels.length) * 100}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-4 md:grid-cols-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 md:col-span-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Curriculum Title
+                </p>
+                <p className="mt-2 text-lg font-bold text-slate-900">
+                  {generatedCurriculumRecord.curriculum.curriculum_title}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Recommended Modules
+                </p>
+                <p className="mt-2 text-lg font-bold text-slate-900">
+                  {generatedCurriculumRecord.curriculum.recommended_modules.length}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Selected
+                </p>
+                <p className="mt-2 text-lg font-bold text-slate-900">
+                  {selectedCurriculumModules.length}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Description
+              </p>
+              <p className="mt-2 text-sm leading-6 text-slate-700">
+                {generatedCurriculumRecord.curriculum.description}
+              </p>
+            </div>
+
+            <div className="mt-6 grid gap-4 lg:grid-cols-2">
+              {generatedCurriculumRecord.curriculum.recommended_modules.map((module) => {
+                const isSelected = selectedCurriculumModules.includes(
+                  module.module_order
+                );
+
+                return (
+                  <article
+                    key={module.module_order}
+                    className={`rounded-lg border p-4 ${
+                      isSelected
+                        ? "border-slate-900 bg-white"
+                        : "border-slate-200 bg-slate-50"
+                    }`}
+                  >
+                    <label className="flex cursor-pointer items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        disabled={isSaving}
+                        onChange={() => toggleCurriculumModule(module.module_order)}
+                        className="mt-1 h-4 w-4 rounded border-slate-300"
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-sm font-bold text-slate-900">
+                          {module.module_order}. {module.title}
+                        </span>
+                        <span className="mt-2 block text-sm leading-6 text-slate-600">
+                          {module.description}
+                        </span>
+                      </span>
+                    </label>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Category
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-slate-800">
+                          {module.category}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Audience
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-slate-800">
+                          {module.recommended_audience}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Estimated Time
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-slate-800">
+                          {module.estimated_minutes} min
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Suggested Contents
+                        </p>
+                        <p className="mt-1 text-sm font-semibold text-slate-800">
+                          {module.suggested_slide_count} slides,{" "}
+                          {module.suggested_quiz_question_count} quiz questions
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-lg bg-slate-50 px-3 py-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Why Separate
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-slate-600">
+                        {module.why_this_should_be_separate}
+                      </p>
+                    </div>
+                    <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Source Topic Summary
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-slate-600">
+                        {module.source_topic_summary}
+                      </p>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
       {importJob?.status === "draft_ready" && generatedDraft && (
         <section className="mt-6 rounded-xl bg-white p-6 shadow-sm">
@@ -1247,7 +1761,7 @@ export default function ImportTrainingPage() {
           {isGenerating && (
             <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="text-sm font-semibold text-slate-900">
-                {generationSteps[generationStepIndex]}
+                {generationStepLabels[generationStepIndex]}
               </p>
             </div>
           )}

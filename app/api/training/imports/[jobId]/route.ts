@@ -125,7 +125,7 @@ export async function DELETE(
     return jsonError("Training import job not found.", 404);
   }
 
-  if (job.created_module_id) {
+  if (job.created_module_id || job.status === "modules_created") {
     return jsonError("This import already created a draft training module.", 409);
   }
 
