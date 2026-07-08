@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import AdminLayout from "@/components/layout/AdminLayout";
 import StatCard from "@/components/dashboard/StatCard";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
@@ -30,6 +31,17 @@ type DashboardResponse = {
 };
 
 type PageStatus = "loading" | "success" | "error";
+type AuthDebugResult = {
+  client: {
+    getSessionErrorMessage: string;
+    sessionExists: boolean;
+    accessTokenLength: number;
+    userEmail: string;
+    fetchWillSendAuthorizationHeader: boolean;
+  };
+  server?: unknown;
+  error?: string;
+};
 
 const emptyMetrics: DashboardMetrics = {
   employees: 0,
@@ -128,11 +140,16 @@ function ActivityList({
 }
 
 export default function Home() {
+  const router = useRouter();
   const [dashboardData, setDashboardData] = useState<DashboardResponse | null>(
     null
   );
   const [pageStatus, setPageStatus] = useState<PageStatus>("loading");
   const [pageError, setPageError] = useState("");
+  const [authDebugResult, setAuthDebugResult] = useState<AuthDebugResult | null>(
+    null
+  );
+  const [authDebugStatus, setAuthDebugStatus] = useState<PageStatus>("success");
 
   useEffect(() => {
     let isMounted = true;
@@ -152,9 +169,19 @@ export default function Home() {
 
       if (!isMounted) return;
 
+      // TODO remove after Vercel auth debugging.
+      console.info("[dashboard-auth-debug] client session", {
+        getSessionErrorMessage: error?.message ?? "",
+        sessionExists: Boolean(data.session),
+        accessTokenLength: data.session?.access_token.length ?? 0,
+        userEmail: data.session?.user.email ?? "",
+        fetchWillSendAuthorizationHeader: Boolean(data.session?.access_token),
+      });
+
       if (error || !data.session?.access_token) {
         setPageStatus("error");
         setPageError(error?.message || "Sign in to view the dashboard.");
+        router.replace("/login?next=%2F");
         return;
       }
 
@@ -187,7 +214,76 @@ export default function Home() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [router]);
+
+  async function handleRunAuthDebug() {
+    setAuthDebugStatus("loading");
+    setAuthDebugResult(null);
+
+    const supabase = createBrowserSupabaseClient();
+
+    if (!supabase) {
+      setAuthDebugStatus("error");
+      setAuthDebugResult({
+        client: {
+          getSessionErrorMessage: "Supabase environment variables are not configured.",
+          sessionExists: false,
+          accessTokenLength: 0,
+          userEmail: "",
+          fetchWillSendAuthorizationHeader: false,
+        },
+        error: "Supabase environment variables are not configured.",
+      });
+      return;
+    }
+
+    const { data, error } = await supabase.auth.getSession();
+    const token = data.session?.access_token ?? "";
+
+    // TODO remove after Vercel auth debugging.
+    console.info("[dashboard-auth-debug] run button session", {
+      getSessionErrorMessage: error?.message ?? "",
+      sessionExists: Boolean(data.session),
+      accessTokenLength: token.length,
+      userEmail: data.session?.user.email ?? "",
+      fetchWillSendAuthorizationHeader: Boolean(token),
+    });
+
+    const clientDebug = {
+      getSessionErrorMessage: error?.message ?? "",
+      sessionExists: Boolean(data.session),
+      accessTokenLength: token.length,
+      userEmail: data.session?.user.email ?? "",
+      fetchWillSendAuthorizationHeader: Boolean(token),
+    };
+
+    try {
+      const response = await fetch("/api/debug-auth", {
+        headers: token
+          ? {
+              Authorization: `Bearer ${token}`,
+            }
+          : {},
+      });
+      const serverDebug = (await response.json().catch(() => null)) as unknown;
+
+      setAuthDebugStatus(response.ok ? "success" : "error");
+      setAuthDebugResult({
+        client: clientDebug,
+        server: serverDebug,
+        error: response.ok ? undefined : "Debug endpoint returned an error.",
+      });
+    } catch (debugError) {
+      setAuthDebugStatus("error");
+      setAuthDebugResult({
+        client: clientDebug,
+        error:
+          debugError instanceof Error
+            ? debugError.message
+            : "Unable to run auth debug.",
+      });
+    }
+  }
 
   const metrics = dashboardData?.metrics ?? emptyMetrics;
   const recentCompletions = dashboardData?.recentCompletions ?? [];
@@ -205,47 +301,78 @@ export default function Home() {
           </div>
         )}
 
-        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-5">
-          <StatCard
-            title="Employees"
-            value={
-              pageStatus === "loading" ? "Loading" : formatNumber(metrics.employees)
-            }
-          />
-          <StatCard
-            title="Training Modules"
-            value={
-              pageStatus === "loading"
-                ? "Loading"
-                : formatNumber(metrics.trainingModules)
-            }
-          />
-          <StatCard
-            title="Completion Rate"
-            value={
-              pageStatus === "loading"
-                ? "Loading"
-                : formatPercent(metrics.completionRate)
-            }
-          />
-          <StatCard
-            title="Average Score"
-            value={
-              pageStatus === "loading"
-                ? "Loading"
-                : metrics.averageScore === null
-                  ? "No data"
-                  : formatPercent(metrics.averageScore)
-            }
-          />
-          <StatCard
-            title="Past Due"
-            value={
-              pageStatus === "loading" ? "Loading" : formatNumber(metrics.pastDue)
-            }
-            valueColor={metrics.pastDue > 0 ? "text-red-600" : "text-slate-900"}
-          />
-        </div>
+        {/* TODO remove after Vercel auth debugging. */}
+        <section className="rounded-xl bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">
+                Auth Diagnostics
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Temporary Vercel session diagnostics.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleRunAuthDebug}
+              disabled={authDebugStatus === "loading"}
+              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {authDebugStatus === "loading" ? "Running..." : "Run Auth Debug"}
+            </button>
+          </div>
+          {authDebugResult && (
+            <pre className="mt-4 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+              {JSON.stringify(authDebugResult, null, 2)}
+            </pre>
+          )}
+        </section>
+
+        {pageStatus !== "error" && (
+          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-5">
+            <StatCard
+              title="Employees"
+              value={
+                pageStatus === "loading"
+                  ? "Loading"
+                  : formatNumber(metrics.employees)
+              }
+            />
+            <StatCard
+              title="Training Modules"
+              value={
+                pageStatus === "loading"
+                  ? "Loading"
+                  : formatNumber(metrics.trainingModules)
+              }
+            />
+            <StatCard
+              title="Completion Rate"
+              value={
+                pageStatus === "loading"
+                  ? "Loading"
+                  : formatPercent(metrics.completionRate)
+              }
+            />
+            <StatCard
+              title="Average Score"
+              value={
+                pageStatus === "loading"
+                  ? "Loading"
+                  : metrics.averageScore === null
+                    ? "No data"
+                    : formatPercent(metrics.averageScore)
+              }
+            />
+            <StatCard
+              title="Past Due"
+              value={
+                pageStatus === "loading" ? "Loading" : formatNumber(metrics.pastDue)
+              }
+              valueColor={metrics.pastDue > 0 ? "text-red-600" : "text-slate-900"}
+            />
+          </div>
+        )}
 
         {pageStatus === "success" && (
           <>
