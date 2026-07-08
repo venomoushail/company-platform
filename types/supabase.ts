@@ -39,6 +39,13 @@ export type EmployeePosition = {
   position_id: string;
 };
 
+export type ManagerLocation = {
+  manager_id: string;
+  location_id: string;
+  company_id: string;
+  created_at: string;
+};
+
 export type TrainingModulePosition = {
   module_id: string;
   position_id: string;
@@ -290,6 +297,36 @@ export type Database = {
           },
           {
             foreignKeyName: "training_module_positions_company_id_fkey";
+            columns: ["company_id"];
+            isOneToOne: false;
+            referencedRelation: "companies";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      manager_locations: {
+        Row: ManagerLocation;
+        Insert: Omit<ManagerLocation, "created_at"> & {
+          created_at?: string;
+        };
+        Update: Partial<ManagerLocation>;
+        Relationships: [
+          {
+            foreignKeyName: "manager_locations_manager_id_fkey";
+            columns: ["manager_id"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "manager_locations_location_id_fkey";
+            columns: ["location_id"];
+            isOneToOne: false;
+            referencedRelation: "locations";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "manager_locations_company_id_fkey";
             columns: ["company_id"];
             isOneToOne: false;
             referencedRelation: "companies";

@@ -13,6 +13,7 @@ import type {
 
 type EmployeeWithPositions = Profile & {
   positions: Position[];
+  managed_locations: Location[];
 };
 
 type EmployeeFormValues = {
@@ -26,6 +27,7 @@ type EmployeeFormValues = {
   position_ids: string[];
   hire_date: string;
   is_active: boolean;
+  managed_location_ids: string[];
 };
 
 type EmployeeFormErrors = Partial<Record<keyof EmployeeFormValues, string>>;
@@ -68,15 +70,6 @@ const roles: ProfileRole[] = ["employee", "manager", "admin"];
 const unassignedLocationFilterId = "__unassigned__";
 const filterControlClass =
   "mt-2 h-11 w-full rounded-lg border border-slate-300 bg-white px-4 text-sm text-slate-900 outline-none transition focus:border-blue-600";
-const positionDisplayOrder = [
-  "Host",
-  "Production",
-  "Server",
-  "Shift Leader",
-  "Team Leader",
-  "Manager",
-  "General Manager",
-];
 
 const emptyFormValues: EmployeeFormValues = {
   first_name: "",
@@ -89,6 +82,7 @@ const emptyFormValues: EmployeeFormValues = {
   position_ids: [],
   hire_date: "",
   is_active: true,
+  managed_location_ids: [],
 };
 
 const emptyTestPasswordValues: TestPasswordFormValues = {
@@ -165,16 +159,6 @@ function getPositionLabels(employee: EmployeeWithPositions) {
 
 function sortPositions(positions: Position[]) {
   return [...positions].sort((firstPosition, secondPosition) => {
-    const firstIndex = positionDisplayOrder.indexOf(firstPosition.name);
-    const secondIndex = positionDisplayOrder.indexOf(secondPosition.name);
-
-    if (firstIndex !== -1 && secondIndex !== -1) {
-      return firstIndex - secondIndex;
-    }
-
-    if (firstIndex !== -1) return -1;
-    if (secondIndex !== -1) return 1;
-
     return firstPosition.name.localeCompare(secondPosition.name);
   });
 }
@@ -346,6 +330,14 @@ function validateEmployeeForm(
     errors.position_ids = "Choose valid positions.";
   }
 
+  if (
+    values.managed_location_ids.some(
+      (locationId) => !locations.some((location) => location.id === locationId)
+    )
+  ) {
+    errors.managed_location_ids = "Choose valid managed locations.";
+  }
+
   return errors;
 }
 
@@ -364,6 +356,14 @@ function validateTestPasswordForm(values: TestPasswordFormValues) {
   }
 
   return errors;
+}
+
+function formatManagedLocations(employee: EmployeeWithPositions) {
+  if (employee.managed_locations.length === 0) return "";
+
+  return employee.managed_locations
+    .map((location) => `Store ${location.store_number}`)
+    .join(", ");
 }
 
 export default function EmployeesPage() {
@@ -414,6 +414,7 @@ export default function EmployeesPage() {
     key: "name",
     direction: "asc",
   });
+  const [hasHandledEmployeeQuery, setHasHandledEmployeeQuery] = useState(false);
 
   const locationFilterOptions = useMemo(
     () => getLocationFilterOptions(locations),
@@ -436,6 +437,7 @@ export default function EmployeesPage() {
         normalize(employee.email).includes(query) ||
         normalize(employee.employee_number).includes(query) ||
         normalize(getLocationLabel(employee.location_id, locations)).includes(query) ||
+        normalize(formatManagedLocations(employee)).includes(query) ||
         employee.positions.some((position) =>
           normalize(position.name).includes(query)
         );
@@ -468,6 +470,32 @@ export default function EmployeesPage() {
 
   const isEditMode = editingEmployeeId !== null;
   const canSetTestPassword = adminProfile?.role === "admin";
+  const canEditManagedLocations = adminProfile?.role === "admin";
+  const selectableLocations = useMemo(
+    () =>
+      locations.filter(
+        (location) =>
+          location.is_active || location.id === formValues.location_id
+      ),
+    [formValues.location_id, locations]
+  );
+  const selectablePositions = useMemo(
+    () =>
+      positions.filter(
+        (position) =>
+          position.is_active || formValues.position_ids.includes(position.id)
+      ),
+    [formValues.position_ids, positions]
+  );
+  const selectableManagedLocations = useMemo(
+    () =>
+      locations.filter(
+        (location) =>
+          location.is_active ||
+          formValues.managed_location_ids.includes(location.id)
+      ),
+    [formValues.managed_location_ids, locations]
+  );
 
   const fetchEmployees = useCallback(async (showLoading = true) => {
     await Promise.resolve();
@@ -514,6 +542,10 @@ export default function EmployeesPage() {
       employeesData.employees.map((employee) => ({
         ...employee,
         positions: sortPositions(employee.positions),
+        managed_locations: [...employee.managed_locations].sort(
+          (firstLocation, secondLocation) =>
+            firstLocation.store_number - secondLocation.store_number
+        ),
       }))
     );
     setLocations(employeesData.locations);
@@ -530,6 +562,63 @@ export default function EmployeesPage() {
 
     return () => window.clearTimeout(timeoutId);
   }, [fetchEmployees]);
+
+  useEffect(() => {
+    if (hasHandledEmployeeQuery || employees.length === 0) return;
+
+    const timeoutId = window.setTimeout(() => {
+      const searchParams = new URLSearchParams(window.location.search);
+      const employeeId = searchParams.get("employeeId");
+
+      if (!employeeId) {
+        setHasHandledEmployeeQuery(true);
+        return;
+      }
+
+      const employee = employees.find(
+        (currentEmployee) => currentEmployee.id === employeeId
+      );
+
+      if (!employee) {
+        setHasHandledEmployeeQuery(true);
+        return;
+      }
+
+      setRoleFilter("all");
+      setStatusFilter("all");
+      setSelectedLocationIds(null);
+      setActionMenuEmployeeId(null);
+      setSuccessMessage(null);
+
+      if (searchParams.get("edit") === "1") {
+        setEditingEmployeeId(employee.id);
+        setFormValues({
+          first_name: employee.first_name,
+          last_name: employee.last_name,
+          preferred_name: employee.preferred_name ?? "",
+          email: employee.email,
+          employee_number: employee.employee_number,
+          role: employee.role,
+          location_id: employee.location_id ?? "",
+          position_ids: employee.positions.map((position) => position.id),
+          managed_location_ids: employee.managed_locations.map(
+            (location) => location.id
+          ),
+          hire_date: employee.hire_date ?? "",
+          is_active: employee.is_active,
+        });
+        setFormErrors({});
+        setFormMessage(null);
+        setIsFormOpen(true);
+      } else {
+        setSearchQuery(employee.email);
+      }
+
+      setHasHandledEmployeeQuery(true);
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [employees, hasHandledEmployeeQuery]);
 
   function updateFormValue<Field extends keyof EmployeeFormValues>(
     field: Field,
@@ -559,6 +648,38 @@ export default function EmployeesPage() {
     setFormErrors((currentErrors) => ({
       ...currentErrors,
       position_ids: undefined,
+    }));
+  }
+
+  function updateManagedLocation(locationId: string, isSelected: boolean) {
+    setFormValues((currentValues) => ({
+      ...currentValues,
+      managed_location_ids: isSelected
+        ? Array.from(new Set([...currentValues.managed_location_ids, locationId]))
+        : currentValues.managed_location_ids.filter(
+            (currentLocationId) => currentLocationId !== locationId
+          ),
+    }));
+
+    setFormErrors((currentErrors) => ({
+      ...currentErrors,
+      managed_location_ids: undefined,
+    }));
+  }
+
+  function selectAllManagedLocations() {
+    setFormValues((currentValues) => ({
+      ...currentValues,
+      managed_location_ids: selectableManagedLocations.map(
+        (location) => location.id
+      ),
+    }));
+  }
+
+  function deselectAllManagedLocations() {
+    setFormValues((currentValues) => ({
+      ...currentValues,
+      managed_location_ids: [],
     }));
   }
 
@@ -617,6 +738,9 @@ export default function EmployeesPage() {
       role: employee.role,
       location_id: employee.location_id ?? "",
       position_ids: employee.positions.map((position) => position.id),
+      managed_location_ids: employee.managed_locations.map(
+        (location) => location.id
+      ),
       hire_date: employee.hire_date ?? "",
       is_active: employee.is_active,
     });
@@ -673,8 +797,8 @@ export default function EmployeesPage() {
     const errors = validateEmployeeForm(
       formValues,
       employees,
-      locations,
-      positions,
+      selectableLocations,
+      selectablePositions,
       editingEmployeeId ?? undefined
     );
     setFormErrors(errors);
@@ -717,6 +841,7 @@ export default function EmployeesPage() {
         role: formValues.role,
         location_id: formValues.location_id || null,
         position_ids: formValues.position_ids,
+        managed_location_ids: formValues.managed_location_ids,
         hire_date: formValues.hire_date || null,
         is_active: formValues.is_active,
       }),
@@ -800,6 +925,9 @@ export default function EmployeesPage() {
         hire_date: employee.hire_date,
         is_active: nextIsActive,
         position_ids: employee.positions.map((position) => position.id),
+        managed_location_ids: employee.managed_locations.map(
+          (location) => location.id
+        ),
       }),
     });
     const data = await response.json();
@@ -1225,9 +1353,10 @@ export default function EmployeesPage() {
                     className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
                   >
                     <option value="">No location assigned</option>
-                    {locations.map((location) => (
+                    {selectableLocations.map((location) => (
                       <option key={location.id} value={location.id}>
                         {formatLocationLabel(location)}
+                        {!location.is_active ? " (inactive)" : ""}
                       </option>
                     ))}
                   </select>
@@ -1265,13 +1394,13 @@ export default function EmployeesPage() {
                     <p className="text-sm font-medium text-slate-500">
                       Loading positions...
                     </p>
-                  ) : positions.length === 0 ? (
+                  ) : selectablePositions.length === 0 ? (
                     <p className="text-sm font-medium text-slate-500">
                       No active positions exist for this company.
                     </p>
                   ) : (
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                      {positions.map((position) => (
+                      {selectablePositions.map((position) => (
                         <label
                           key={position.id}
                           className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
@@ -1289,13 +1418,85 @@ export default function EmployeesPage() {
                             }
                             className="h-4 w-4"
                           />
-                          {position.name}
+                          <span>
+                            {position.name}
+                            {!position.is_active ? " (inactive)" : ""}
+                          </span>
                         </label>
                       ))}
                     </div>
                   )}
                 </div>
               </FormField>
+
+              {(formValues.role === "manager" || formValues.role === "admin") && (
+                <FormField
+                  label="Managed Locations"
+                  error={formErrors.managed_location_ids}
+                >
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+                      <p className="text-sm font-medium text-slate-600">
+                        {canEditManagedLocations
+                          ? "Select the locations this manager can oversee."
+                          : "Only admins can update managed locations."}
+                      </p>
+                      {canEditManagedLocations && (
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={selectAllManagedLocations}
+                            className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            Select All
+                          </button>
+                          <button
+                            type="button"
+                            onClick={deselectAllManagedLocations}
+                            className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            Deselect All
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {selectableManagedLocations.length === 0 ? (
+                      <p className="text-sm font-medium text-slate-500">
+                        No active locations are available.
+                      </p>
+                    ) : (
+                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                        {selectableManagedLocations.map((location) => (
+                          <label
+                            key={location.id}
+                            className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                          >
+                            <input
+                              type="checkbox"
+                              disabled={!canEditManagedLocations}
+                              checked={formValues.managed_location_ids.includes(
+                                location.id
+                              )}
+                              onChange={(event) =>
+                                updateManagedLocation(
+                                  location.id,
+                                  event.target.checked
+                                )
+                              }
+                              className="h-4 w-4 disabled:cursor-not-allowed"
+                            />
+                            <span>
+                              {formatLocationLabel(location)}
+                              {!location.is_active ? " (inactive)" : ""}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </FormField>
+              )}
 
               <div className="flex flex-wrap justify-end gap-3 border-t border-slate-200 pt-5">
                 <button
@@ -1428,6 +1629,13 @@ export default function EmployeesPage() {
                         >
                           {employee.role}
                         </span>
+                        {(employee.role === "manager" ||
+                          employee.role === "admin") &&
+                          formatManagedLocations(employee) && (
+                            <p className="mt-2 max-w-48 text-xs leading-5 text-slate-500">
+                              Manages: {formatManagedLocations(employee)}
+                            </p>
+                          )}
                       </TableCell>
                       <TableCell>
                         {getPositionLabels(employee).length === 0 ? (

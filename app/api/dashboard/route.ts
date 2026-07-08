@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAdminContextForUserId } from "@/lib/auth/server";
 import { isAdminRole } from "@/lib/auth/roles";
-import { getDataScope } from "@/lib/auth/scope";
+import { getDataScopeForProfile } from "@/lib/auth/scope";
 import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
@@ -119,7 +119,12 @@ async function requireAdminContext(request: Request) {
     };
   }
 
-  return { response: null, supabase, profile, scope: getDataScope(profile) };
+  return {
+    response: null,
+    supabase,
+    profile,
+    scope: await getDataScopeForProfile(supabase, profile),
+  };
 }
 
 function getJoinedActivity(
@@ -159,7 +164,7 @@ function isAssignmentPastDue(
 }
 
 export async function GET(request: Request) {
-  const { response, supabase, scope } = await requireAdminContext(request);
+  const { response, supabase, profile, scope } = await requireAdminContext(request);
 
   if (response) return response;
 
@@ -273,6 +278,10 @@ export async function GET(request: Request) {
   );
 
   return NextResponse.json({
+    profile: {
+      preferred_name: profile.preferred_name,
+      first_name: profile.first_name,
+    },
     metrics: {
       employees: employees.length,
       trainingModules: modules.length,

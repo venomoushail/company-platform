@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import AdminLayout from "@/components/layout/AdminLayout";
 import StatCard from "@/components/dashboard/StatCard";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
-import type { TrainingAssignment } from "@/types/supabase";
+import type { Profile, TrainingAssignment } from "@/types/supabase";
 
 type DashboardMetrics = {
   employees: number;
@@ -24,6 +24,7 @@ type DashboardActivity = {
 };
 
 type DashboardResponse = {
+  profile: Pick<Profile, "preferred_name" | "first_name">;
   metrics: DashboardMetrics;
   recentCompletions: DashboardActivity[];
   needsAttention: DashboardActivity[];
@@ -83,6 +84,45 @@ function formatDate(value: string | null) {
 
 function formatScore(value: number | null) {
   return value === null ? "No score" : `${formatNumber(value)}%`;
+}
+
+function getGreetingPeriod() {
+  const hour = new Date().getHours();
+
+  if (hour < 12) return "Good Morning";
+  if (hour < 17) return "Good Afternoon";
+
+  return "Good Evening";
+}
+
+function getGreetingName(profile?: Pick<Profile, "preferred_name" | "first_name">) {
+  return profile?.preferred_name?.trim() || profile?.first_name?.trim() || "there";
+}
+
+function pluralize(count: number, singular: string, plural = `${singular}s`) {
+  return `${formatNumber(count)} ${count === 1 ? singular : plural}`;
+}
+
+function getAdminWelcomeMessage(metrics: DashboardMetrics) {
+  if (metrics.pastDue === 0 && metrics.completedAssignments === 0) {
+    return "Everything looks great! Your team's training is up to date.";
+  }
+
+  if (metrics.pastDue === 0) {
+    return `Everything looks great! Your team completed ${pluralize(
+      metrics.completedAssignments,
+      "training"
+    )}.`;
+  }
+
+  return `You have ${pluralize(
+    metrics.pastDue,
+    "employee",
+    "employees"
+  )} with overdue training and ${pluralize(
+    metrics.completedAssignments,
+    "completed training"
+  )}.`;
 }
 
 function ActivityList({
@@ -293,6 +333,11 @@ export default function Home() {
   const metrics = dashboardData?.metrics ?? emptyMetrics;
   const recentCompletions = dashboardData?.recentCompletions ?? [];
   const needsAttention = dashboardData?.needsAttention ?? [];
+  const greetingName = getGreetingName(dashboardData?.profile);
+  const welcomeMessage =
+    pageStatus === "loading"
+      ? "Loading your team's training activity."
+      : getAdminWelcomeMessage(metrics);
 
   return (
     <AdminLayout
@@ -335,49 +380,63 @@ export default function Home() {
         )}
 
         {pageStatus !== "error" && (
-          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-5">
-            <StatCard
-              title="Employees"
-              value={
-                pageStatus === "loading"
-                  ? "Loading"
-                  : formatNumber(metrics.employees)
-              }
-            />
-            <StatCard
-              title="Training Modules"
-              value={
-                pageStatus === "loading"
-                  ? "Loading"
-                  : formatNumber(metrics.trainingModules)
-              }
-            />
-            <StatCard
-              title="Completion Rate"
-              value={
-                pageStatus === "loading"
-                  ? "Loading"
-                  : formatPercent(metrics.completionRate)
-              }
-            />
-            <StatCard
-              title="Average Score"
-              value={
-                pageStatus === "loading"
-                  ? "Loading"
-                  : metrics.averageScore === null
-                    ? "No data"
-                    : formatPercent(metrics.averageScore)
-              }
-            />
-            <StatCard
-              title="Past Due"
-              value={
-                pageStatus === "loading" ? "Loading" : formatNumber(metrics.pastDue)
-              }
-              valueColor={metrics.pastDue > 0 ? "text-red-600" : "text-slate-900"}
-            />
-          </div>
+          <>
+            <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+              <p className="text-sm font-semibold uppercase tracking-wide text-[var(--company-accent)]">
+                Dashboard
+              </p>
+              <h2 className="mt-3 text-4xl font-bold text-slate-900 md:text-5xl">
+                {getGreetingPeriod()}, {greetingName}! 👋
+              </h2>
+              <p className="mt-3 max-w-3xl text-base leading-7 text-slate-600">
+                {welcomeMessage}
+              </p>
+            </section>
+
+            <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-5">
+              <StatCard
+                title="Employees"
+                value={
+                  pageStatus === "loading"
+                    ? "Loading"
+                    : formatNumber(metrics.employees)
+                }
+              />
+              <StatCard
+                title="Training Modules"
+                value={
+                  pageStatus === "loading"
+                    ? "Loading"
+                    : formatNumber(metrics.trainingModules)
+                }
+              />
+              <StatCard
+                title="Completion Rate"
+                value={
+                  pageStatus === "loading"
+                    ? "Loading"
+                    : formatPercent(metrics.completionRate)
+                }
+              />
+              <StatCard
+                title="Average Score"
+                value={
+                  pageStatus === "loading"
+                    ? "Loading"
+                    : metrics.averageScore === null
+                      ? "No data"
+                      : formatPercent(metrics.averageScore)
+                }
+              />
+              <StatCard
+                title="Past Due"
+                value={
+                  pageStatus === "loading" ? "Loading" : formatNumber(metrics.pastDue)
+                }
+                valueColor={metrics.pastDue > 0 ? "text-red-600" : "text-slate-900"}
+              />
+            </div>
+          </>
         )}
 
         {pageStatus === "success" && (

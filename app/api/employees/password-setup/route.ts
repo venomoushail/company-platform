@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAdminContextForUserId } from "@/lib/auth/server";
 import { isAdminRole } from "@/lib/auth/roles";
-import { canAccessEmployee, getDataScope } from "@/lib/auth/scope";
+import { canAccessEmployee, getDataScopeForProfile } from "@/lib/auth/scope";
 import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
@@ -148,7 +148,12 @@ async function requireAdminContext(request: Request) {
     };
   }
 
-  return { response: null, supabase, profile, scope: getDataScope(profile) };
+  return {
+    response: null,
+    supabase,
+    profile,
+    scope: await getDataScopeForProfile(supabase, profile),
+  };
 }
 
 export async function POST(request: Request) {

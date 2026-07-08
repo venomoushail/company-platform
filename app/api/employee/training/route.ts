@@ -43,6 +43,9 @@ type TrainingStatus = {
   latest_passed: boolean | null;
   attempt_count: number;
   can_retake: boolean;
+  assigned_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
   action_label:
     | "Start Training"
     | "Continue Training"
@@ -316,6 +319,9 @@ function buildTrainingStatus(
       latest_passed: assignment?.passed ?? latestAttempt?.passed ?? true,
       attempt_count: attempts.length,
       can_retake: false,
+      assigned_at: assignment?.assigned_at ?? null,
+      started_at: assignment?.started_at ?? null,
+      completed_at: assignment?.completed_at ?? null,
       action_label: "Review Training",
     };
   }
@@ -332,6 +338,9 @@ function buildTrainingStatus(
       latest_passed: false,
       attempt_count: attempts.length,
       can_retake: canRetake,
+      assigned_at: assignment?.assigned_at ?? null,
+      started_at: assignment?.started_at ?? null,
+      completed_at: assignment?.completed_at ?? null,
       action_label: canRetake ? "Retake Quiz" : "Review Training",
     };
   }
@@ -348,6 +357,9 @@ function buildTrainingStatus(
       latest_passed: assignment?.passed ?? null,
       attempt_count: attempts.length,
       can_retake: false,
+      assigned_at: assignment?.assigned_at ?? null,
+      started_at: assignment?.started_at ?? null,
+      completed_at: assignment?.completed_at ?? null,
       action_label: "Start Quiz",
     };
   }
@@ -364,6 +376,9 @@ function buildTrainingStatus(
       latest_passed: assignment?.passed ?? null,
       attempt_count: attempts.length,
       can_retake: false,
+      assigned_at: assignment?.assigned_at ?? null,
+      started_at: assignment?.started_at ?? null,
+      completed_at: assignment?.completed_at ?? null,
       action_label: "Continue Training",
     };
   }
@@ -379,6 +394,9 @@ function buildTrainingStatus(
     latest_passed: assignment?.passed ?? null,
     attempt_count: attempts.length,
     can_retake: false,
+    assigned_at: assignment?.assigned_at ?? null,
+    started_at: assignment?.started_at ?? null,
+    completed_at: assignment?.completed_at ?? null,
     action_label: "Start Training",
   };
 }

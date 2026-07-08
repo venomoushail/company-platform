@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { Profile } from "@/types/supabase";
+import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 
 export type DataScope = {
   profile: Profile;
@@ -8,6 +9,7 @@ export type DataScope = {
   companyId: string;
   userId: string;
   locationId: string | null;
+  allowedLocationIds: string[] | null;
   locationIds: string[];
   canAccessAllLocations: boolean;
   isAdmin: boolean;
@@ -19,6 +21,7 @@ export function getDataScope(profile: Profile): DataScope {
   const isAdmin = profile.role === "admin";
   const isManager = profile.role === "manager";
   const locationIds = isManager && profile.location_id ? [profile.location_id] : [];
+  const allowedLocationIds = isAdmin ? null : locationIds;
 
   return {
     profile,
@@ -26,11 +29,53 @@ export function getDataScope(profile: Profile): DataScope {
     companyId: profile.company_id,
     userId: profile.id,
     locationId: profile.location_id,
+    allowedLocationIds,
     locationIds,
     canAccessAllLocations: isAdmin,
     isAdmin,
     isManager,
     isEmployee: profile.role === "employee",
+  };
+}
+
+export async function getDataScopeForProfile(
+  supabase: ReturnType<typeof createAdminSupabaseClient>,
+  profile: Profile
+): Promise<DataScope> {
+  if (profile.role !== "manager") return getDataScope(profile);
+
+  const { data, error } = await supabase
+    .from("manager_locations")
+    .select("location_id")
+    .eq("manager_id", profile.id)
+    .eq("company_id", profile.company_id);
+
+  if (error) {
+    console.error("[auth-scope] Manager locations lookup failed", error);
+  }
+
+  const managedLocationIds = Array.from(
+    new Set((data ?? []).map((row) => row.location_id).filter(Boolean))
+  );
+  const locationIds =
+    managedLocationIds.length > 0
+      ? managedLocationIds
+      : profile.location_id
+        ? [profile.location_id]
+        : [];
+
+  return {
+    profile,
+    role: profile.role,
+    companyId: profile.company_id,
+    userId: profile.id,
+    locationId: profile.location_id,
+    allowedLocationIds: locationIds,
+    locationIds,
+    canAccessAllLocations: false,
+    isAdmin: false,
+    isManager: true,
+    isEmployee: false,
   };
 }
 

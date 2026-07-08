@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { getAdminContextForUserId } from "@/lib/auth/server";
 import { isAdminRole } from "@/lib/auth/roles";
-import { canAccessEmployee, canAccessLocation, getDataScope } from "@/lib/auth/scope";
+import { canAccessEmployee, canAccessLocation, getDataScopeForProfile } from "@/lib/auth/scope";
 import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
 } from "@/lib/supabase/admin";
-import type { Position, Profile, ProfileRole } from "@/types/supabase";
+import type { Location, Position, Profile, ProfileRole } from "@/types/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -24,10 +24,12 @@ type EmployeePayload = {
   hire_date?: unknown;
   is_active?: unknown;
   position_ids?: unknown;
+  managed_location_ids?: unknown;
 };
 
 type EmployeeWithPositions = Profile & {
   positions: Position[];
+  managed_locations: Location[];
 };
 
 function getBearerToken(request: Request) {
@@ -202,7 +204,12 @@ async function requireAdminContext(request: Request) {
     };
   }
 
-  return { response: null, supabase, profile, scope: getDataScope(profile) };
+  return {
+    response: null,
+    supabase,
+    profile,
+    scope: await getDataScopeForProfile(supabase, profile),
+  };
 }
 
 function readString(value: unknown) {
@@ -229,6 +236,9 @@ function validateEmployeePayload(
   const locationId = readString(payload.location_id);
   const hireDate = readString(payload.hire_date);
   const positionIds = Array.from(new Set(readStringArray(payload.position_ids)));
+  const managedLocationIds = Array.from(
+    new Set(readStringArray(payload.managed_location_ids))
+  );
   const isActive =
     typeof payload.is_active === "boolean" ? payload.is_active : true;
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -261,10 +271,69 @@ function validateEmployeePayload(
       locationId: locationId || null,
       hireDate: hireDate || null,
       positionIds,
+      managedLocationIds,
       isActive,
     },
     fieldErrors,
   };
+}
+
+async function validateManagedLocationIds(
+  supabase: ReturnType<typeof createAdminSupabaseClient>,
+  companyId: string,
+  managedLocationIds: string[]
+) {
+  if (managedLocationIds.length === 0) return { response: null };
+
+  const { data, error } = await supabase
+    .from("locations")
+    .select("id")
+    .eq("company_id", companyId)
+    .in("id", managedLocationIds);
+
+  if (error) {
+    logServerError("Managed location validation failed", error);
+    return { response: jsonError("Unable to validate managed locations.", 500) };
+  }
+
+  if ((data?.length ?? 0) !== managedLocationIds.length) {
+    return {
+      response: jsonError("Choose valid managed locations.", 400, {
+        managed_location_ids: "Choose company locations.",
+      }),
+    };
+  }
+
+  return { response: null };
+}
+
+async function replaceManagerLocations(
+  supabase: ReturnType<typeof createAdminSupabaseClient>,
+  managerId: string,
+  companyId: string,
+  managedLocationIds: string[]
+) {
+  const { error: deleteError } = await supabase
+    .from("manager_locations")
+    .delete()
+    .eq("manager_id", managerId)
+    .eq("company_id", companyId);
+
+  if (deleteError) return { error: deleteError };
+
+  if (managedLocationIds.length === 0) return { error: null };
+
+  const { error: insertError } = await supabase
+    .from("manager_locations")
+    .insert(
+      managedLocationIds.map((locationId) => ({
+        manager_id: managerId,
+        location_id: locationId,
+        company_id: companyId,
+      }))
+    );
+
+  return { error: insertError };
 }
 
 function readEmployeeId(payload: EmployeePayload) {
@@ -310,7 +379,6 @@ export async function GET(request: Request) {
       .from("positions")
       .select("*")
       .eq("company_id", scope.companyId)
-      .eq("is_active", true)
       .order("name", { ascending: true }),
     supabase
       .from("companies")
@@ -340,30 +408,46 @@ export async function GET(request: Request) {
   }
 
   const employees = employeesResult.data ?? [];
+  const locations = locationsResult.data ?? [];
   const positions = positionsResult.data ?? [];
+  const locationById = new Map(locations.map((location) => [location.id, location]));
   const positionById = new Map(positions.map((position) => [position.id, position]));
   const employeeIds = employees.map((employee) => employee.id);
   let employeesWithPositions: EmployeeWithPositions[] = employees.map(
     (employee) => ({
       ...employee,
       positions: [],
+      managed_locations: [],
     })
   );
 
   if (employeeIds.length > 0) {
-    const { data: assignments, error: assignmentsError } = await supabase
-      .from("employee_positions")
-      .select("employee_id,position_id")
-      .in("employee_id", employeeIds);
+    const [assignmentsResult, managerLocationsResult] = await Promise.all([
+      supabase
+        .from("employee_positions")
+        .select("employee_id,position_id")
+        .in("employee_id", employeeIds),
+      supabase
+        .from("manager_locations")
+        .select("manager_id,location_id")
+        .eq("company_id", scope.companyId)
+        .in("manager_id", employeeIds),
+    ]);
 
-    if (assignmentsError) {
-      logServerError("Employee position fetch failed", assignmentsError);
-      return jsonError(assignmentsError.message, 500);
+    if (assignmentsResult.error) {
+      logServerError("Employee position fetch failed", assignmentsResult.error);
+      return jsonError(assignmentsResult.error.message, 500);
+    }
+
+    if (managerLocationsResult.error) {
+      logServerError("Manager locations fetch failed", managerLocationsResult.error);
+      return jsonError("Unable to load manager locations.", 500);
     }
 
     const positionsByEmployeeId = new Map<string, Position[]>();
+    const managedLocationsByManagerId = new Map<string, Location[]>();
 
-    for (const assignment of assignments ?? []) {
+    for (const assignment of assignmentsResult.data ?? []) {
       const assignedPosition = positionById.get(assignment.position_id);
 
       if (!assignedPosition) continue;
@@ -374,15 +458,27 @@ export async function GET(request: Request) {
       positionsByEmployeeId.set(assignment.employee_id, currentPositions);
     }
 
+    for (const assignment of managerLocationsResult.data ?? []) {
+      const managedLocation = locationById.get(assignment.location_id);
+
+      if (!managedLocation) continue;
+
+      const currentLocations =
+        managedLocationsByManagerId.get(assignment.manager_id) ?? [];
+      currentLocations.push(managedLocation);
+      managedLocationsByManagerId.set(assignment.manager_id, currentLocations);
+    }
+
     employeesWithPositions = employees.map((employee) => ({
       ...employee,
       positions: positionsByEmployeeId.get(employee.id) ?? [],
+      managed_locations: managedLocationsByManagerId.get(employee.id) ?? [],
     }));
   }
 
   return NextResponse.json({
     employees: employeesWithPositions,
-    locations: locationsResult.data,
+    locations,
     positions,
     company: companyResult.data,
     adminProfile: profile,
@@ -433,6 +529,7 @@ export async function POST(request: Request) {
       .select("id")
       .eq("id", values.locationId)
       .eq("company_id", scope.companyId)
+      .eq("is_active", true)
       .maybeSingle();
 
     if (locationError) {
@@ -442,7 +539,7 @@ export async function POST(request: Request) {
 
     if (!location) {
       return jsonError("Choose a valid location.", 400, {
-        location_id: "Choose a valid location.",
+        location_id: "Choose an active location.",
       });
     }
   }
@@ -465,6 +562,18 @@ export async function POST(request: Request) {
       return jsonError("Choose valid positions.", 400, {
         position_ids: "Choose valid positions.",
       });
+    }
+  }
+
+  if (profile.role === "admin" && ["manager", "admin"].includes(values.role)) {
+    const managedLocationValidation = await validateManagedLocationIds(
+      supabase,
+      scope.companyId,
+      values.managedLocationIds
+    );
+
+    if (managedLocationValidation.response) {
+      return managedLocationValidation.response;
     }
   }
 
@@ -560,6 +669,24 @@ export async function POST(request: Request) {
     }
   }
 
+  if (profile.role === "admin" && ["manager", "admin"].includes(values.role)) {
+    const managerLocationReplacement = await replaceManagerLocations(
+      supabase,
+      authData.user.id,
+      scope.companyId,
+      values.managedLocationIds
+    );
+
+    if (managerLocationReplacement.error) {
+      logServerError(
+        "Manager location insert failed",
+        managerLocationReplacement.error
+      );
+      await supabase.auth.admin.deleteUser(authData.user.id);
+      return jsonError("Unable to assign managed locations. Please try again.", 500);
+    }
+  }
+
   return NextResponse.json({ employee }, { status: 201 });
 }
 
@@ -634,12 +761,15 @@ export async function PATCH(request: Request) {
     });
   }
 
-  if (values.locationId) {
+  const didLocationChange = values.locationId !== existingEmployee.location_id;
+
+  if (values.locationId && didLocationChange) {
     const { data: location, error: locationError } = await supabase
       .from("locations")
       .select("id")
       .eq("id", values.locationId)
       .eq("company_id", scope.companyId)
+      .eq("is_active", true)
       .maybeSingle();
 
     if (locationError) {
@@ -649,19 +779,32 @@ export async function PATCH(request: Request) {
 
     if (!location) {
       return jsonError("Choose a valid location.", 400, {
-        location_id: "Choose a valid location.",
+        location_id: "Choose an active location.",
       });
     }
   }
 
   let selectedPositions: Position[] = [];
+  const { data: existingPositionAssignments, error: existingPositionsError } =
+    await supabase
+      .from("employee_positions")
+      .select("position_id")
+      .eq("employee_id", employeeId);
+
+  if (existingPositionsError) {
+    logServerError("Existing employee position fetch failed", existingPositionsError);
+    return jsonError("Unable to update positions. Please try again.", 500);
+  }
+
+  const existingPositionIds = new Set(
+    (existingPositionAssignments ?? []).map((assignment) => assignment.position_id)
+  );
 
   if (values.positionIds.length > 0) {
     const { data, error: selectedPositionsError } = await supabase
       .from("positions")
       .select("*")
       .eq("company_id", scope.companyId)
-      .eq("is_active", true)
       .in("id", values.positionIds);
 
     if (selectedPositionsError) {
@@ -669,13 +812,37 @@ export async function PATCH(request: Request) {
       return jsonError(selectedPositionsError.message, 500);
     }
 
-    if ((data?.length ?? 0) !== values.positionIds.length) {
+    const selectedPositionRows = data ?? [];
+    const validPositionIds = new Set(
+      selectedPositionRows
+        .filter(
+          (position) => position.is_active || existingPositionIds.has(position.id)
+        )
+        .map((position) => position.id)
+    );
+
+    if (
+      selectedPositionRows.length !== values.positionIds.length ||
+      values.positionIds.some((positionId) => !validPositionIds.has(positionId))
+    ) {
       return jsonError("Choose valid positions.", 400, {
-        position_ids: "Choose valid positions.",
+        position_ids: "Choose active positions.",
       });
     }
 
-    selectedPositions = data ?? [];
+    selectedPositions = selectedPositionRows;
+  }
+
+  if (profile.role === "admin" && ["manager", "admin"].includes(values.role)) {
+    const managedLocationValidation = await validateManagedLocationIds(
+      supabase,
+      scope.companyId,
+      values.managedLocationIds
+    );
+
+    if (managedLocationValidation.response) {
+      return managedLocationValidation.response;
+    }
   }
 
   const { data: duplicateEmail, error: duplicateEmailError } = await supabase
@@ -802,6 +969,23 @@ export async function PATCH(request: Request) {
     if (positionInsertError) {
       logServerError("Employee position insert failed", positionInsertError);
       return jsonError("Unable to update positions. Please try again.", 500);
+    }
+  }
+
+  if (profile.role === "admin") {
+    const managerLocationReplacement = await replaceManagerLocations(
+      supabase,
+      employeeId,
+      scope.companyId,
+      ["manager", "admin"].includes(values.role) ? values.managedLocationIds : []
+    );
+
+    if (managerLocationReplacement.error) {
+      logServerError(
+        "Manager location replacement failed",
+        managerLocationReplacement.error
+      );
+      return jsonError("Unable to update managed locations. Please try again.", 500);
     }
   }
 

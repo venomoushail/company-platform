@@ -34,6 +34,9 @@ type TrainingStatus = {
   latest_passed: boolean | null;
   attempt_count: number;
   can_retake: boolean;
+  assigned_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
   action_label:
     | "Start Training"
     | "Continue Training"
@@ -107,6 +110,63 @@ function isActiveTraining(status: TrainingStatus | undefined) {
     status.status === "lesson_complete_quiz_required" ||
     status.status === "failed_retake_available"
   );
+}
+
+function getGreetingPeriod() {
+  const hour = new Date().getHours();
+
+  if (hour < 12) return "Good Morning";
+  if (hour < 17) return "Good Afternoon";
+
+  return "Good Evening";
+}
+
+function getGreetingName(profile: Profile | null) {
+  return profile?.preferred_name?.trim() || profile?.first_name?.trim() || "there";
+}
+
+function pluralize(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function isOverdueTraining(module: TrainingModule, status: TrainingStatus | undefined) {
+  if (!status?.assigned_at || !module.days_allowed || status.status === "completed") {
+    return false;
+  }
+
+  const dueDate = new Date(status.assigned_at);
+  dueDate.setDate(dueDate.getDate() + module.days_allowed);
+
+  return dueDate < new Date();
+}
+
+function getEmployeeWelcomeMessage(
+  modules: TrainingModule[],
+  statuses: Record<string, TrainingStatus>
+) {
+  const overdueCount = modules.filter((module) =>
+    isOverdueTraining(module, statuses[module.id])
+  ).length;
+  const activeCount = modules.filter((module) =>
+    isActiveTraining(statuses[module.id])
+  ).length;
+
+  if (overdueCount > 0) {
+    return `You have ${pluralize(
+      overdueCount,
+      "overdue training",
+      "overdue trainings"
+    )} that needs your attention.`;
+  }
+
+  if (activeCount > 0) {
+    return `Welcome back! You have ${pluralize(
+      activeCount,
+      "training course"
+    )} ready to complete.`;
+  }
+
+  return "You're all caught up! Great job staying current with your training.";
 }
 
 function EmployeeDashboardContent() {
@@ -183,6 +243,10 @@ function EmployeeDashboardContent() {
   const visibleModules = showCompletedOnly
     ? modules.filter((module) => isCompletedTraining(statuses[module.id]))
     : modules.filter((module) => isActiveTraining(statuses[module.id]));
+  const greetingMessage =
+    pageStatus === "loading"
+      ? "Loading your assigned training courses."
+      : getEmployeeWelcomeMessage(modules, statuses);
 
   return (
     <EmployeeLayout
@@ -207,114 +271,148 @@ function EmployeeDashboardContent() {
           {pageError}
         </section>
       ) : showAccount ? (
-        <section className="rounded-xl bg-white p-6 shadow-sm">
-          <dl className="grid gap-5 md:grid-cols-2">
-            <div>
-              <dt className="text-sm font-semibold text-slate-500">Name</dt>
-              <dd className="mt-1 font-medium text-slate-900">
-                {profile?.full_name || "Not set"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-sm font-semibold text-slate-500">Email</dt>
-              <dd className="mt-1 font-medium text-slate-900">
-                {profile?.email || "Not set"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-sm font-semibold text-slate-500">
-                Employee Number
-              </dt>
-              <dd className="mt-1 font-medium text-slate-900">
-                {profile?.employee_number || "Not set"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-sm font-semibold text-slate-500">Company</dt>
-              <dd className="mt-1 font-medium text-slate-900">
-                {company?.name || "Not set"}
-              </dd>
-            </div>
-          </dl>
-        </section>
+        <>
+          <DashboardGreeting
+            name={getGreetingName(profile)}
+            message={greetingMessage}
+          />
+          <section className="rounded-xl bg-white p-6 shadow-sm">
+            <dl className="grid gap-5 md:grid-cols-2">
+              <div>
+                <dt className="text-sm font-semibold text-slate-500">Name</dt>
+                <dd className="mt-1 font-medium text-slate-900">
+                  {profile?.full_name || "Not set"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-sm font-semibold text-slate-500">Email</dt>
+                <dd className="mt-1 font-medium text-slate-900">
+                  {profile?.email || "Not set"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-sm font-semibold text-slate-500">
+                  Employee Number
+                </dt>
+                <dd className="mt-1 font-medium text-slate-900">
+                  {profile?.employee_number || "Not set"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-sm font-semibold text-slate-500">Company</dt>
+                <dd className="mt-1 font-medium text-slate-900">
+                  {company?.name || "Not set"}
+                </dd>
+              </div>
+            </dl>
+          </section>
+        </>
       ) : visibleModules.length === 0 ? (
-        <section className="rounded-xl bg-white p-8 text-center shadow-sm">
-          <p className="font-semibold text-slate-900">
-            {showCompletedOnly
-              ? "No completed trainings yet"
-              : "You're all caught up."}
-          </p>
-          <p className="mt-2 text-sm text-slate-500">
-            {showCompletedOnly
-              ? "Completed trainings will appear here after you pass them."
-              : "Completed trainings are available in the Completed tab."}
-          </p>
-        </section>
+        <>
+          <DashboardGreeting
+            name={getGreetingName(profile)}
+            message={greetingMessage}
+          />
+          <section className="rounded-xl bg-white p-8 text-center shadow-sm">
+            <p className="font-semibold text-slate-900">
+              {showCompletedOnly
+                ? "No completed trainings yet"
+                : "You're all caught up."}
+            </p>
+            <p className="mt-2 text-sm text-slate-500">
+              {showCompletedOnly
+                ? "Completed trainings will appear here after you pass them."
+                : "Completed trainings are available in the Completed tab."}
+            </p>
+          </section>
+        </>
       ) : (
-        <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {visibleModules.map((module) => {
-            const status = statuses[module.id];
+        <>
+          <DashboardGreeting
+            name={getGreetingName(profile)}
+            message={greetingMessage}
+          />
+          <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+            {visibleModules.map((module) => {
+              const status = statuses[module.id];
 
-            return (
-              <article
-                key={module.id}
-                className="flex min-h-72 flex-col rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-                      {module.category || "General"}
-                    </p>
-                    <h2 className="mt-2 text-xl font-bold text-slate-900">
-                      {module.title}
-                    </h2>
+              return (
+                <article
+                  key={module.id}
+                  className="flex min-h-72 flex-col rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
+                        {module.category || "General"}
+                      </p>
+                      <h2 className="mt-2 text-xl font-bold text-slate-900">
+                        {module.title}
+                      </h2>
+                    </div>
+
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusClass(
+                        status
+                      )}`}
+                    >
+                      {getStatusLabel(status)}
+                    </span>
                   </div>
 
-                  <span
-                    className={`rounded-full px-3 py-1 text-xs font-semibold ${getStatusClass(
-                      status
-                    )}`}
-                  >
-                    {getStatusLabel(status)}
-                  </span>
-                </div>
+                  <p className="mt-4 line-clamp-4 text-sm leading-6 text-slate-600">
+                    {module.description || "No description provided."}
+                  </p>
 
-                <p className="mt-4 line-clamp-4 text-sm leading-6 text-slate-600">
-                  {module.description || "No description provided."}
-                </p>
+                  <div className="mt-auto pt-6">
+                    <div className="mb-3 flex items-center justify-between border-t border-slate-200 pt-4 text-sm text-slate-500">
+                      <span>{formatMinutes(module.estimated_minutes)}</span>
+                      <span>{status?.progress_percent ?? 0}% complete</span>
+                    </div>
 
-                <div className="mt-auto pt-6">
-                  <div className="mb-3 flex items-center justify-between border-t border-slate-200 pt-4 text-sm text-slate-500">
-                    <span>{formatMinutes(module.estimated_minutes)}</span>
-                    <span>{status?.progress_percent ?? 0}% complete</span>
+                    <div className="mb-4 h-2 overflow-hidden rounded-full bg-slate-200">
+                      <div
+                        className="h-full rounded-full bg-blue-600"
+                        style={{ width: `${status?.progress_percent ?? 0}%` }}
+                      />
+                    </div>
+
+                    {status?.latest_score !== null && status?.latest_score !== undefined && (
+                      <p className="mb-4 text-sm font-medium text-slate-600">
+                        Latest score: {status.latest_score}%
+                      </p>
+                    )}
+
+                    <Link
+                      href={`/employee/training/${module.id}`}
+                      className="block rounded-lg bg-blue-600 px-4 py-2 text-center text-sm font-semibold text-white hover:bg-blue-700"
+                    >
+                      {status?.action_label || "Start Training"}
+                    </Link>
                   </div>
-
-                  <div className="mb-4 h-2 overflow-hidden rounded-full bg-slate-200">
-                    <div
-                      className="h-full rounded-full bg-blue-600"
-                      style={{ width: `${status?.progress_percent ?? 0}%` }}
-                    />
-                  </div>
-
-                  {status?.latest_score !== null && status?.latest_score !== undefined && (
-                    <p className="mb-4 text-sm font-medium text-slate-600">
-                      Latest score: {status.latest_score}%
-                    </p>
-                  )}
-
-                  <Link
-                    href={`/employee/training/${module.id}`}
-                    className="block rounded-lg bg-blue-600 px-4 py-2 text-center text-sm font-semibold text-white hover:bg-blue-700"
-                  >
-                    {status?.action_label || "Start Training"}
-                  </Link>
-                </div>
-              </article>
-            );
-          })}
-        </section>
+                </article>
+              );
+            })}
+          </section>
+        </>
       )}
     </EmployeeLayout>
+  );
+}
+
+function DashboardGreeting({ name, message }: { name: string; message: string }) {
+  return (
+    <section className="mb-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+      <p className="text-sm font-semibold uppercase tracking-wide text-[var(--company-accent)]">
+        Dashboard
+      </p>
+      <h1 className="mt-3 text-4xl font-bold text-slate-900 md:text-5xl">
+        {getGreetingPeriod()}, {name}! 👋
+      </h1>
+      <p className="mt-3 max-w-3xl text-base leading-7 text-slate-600">
+        {message}
+      </p>
+    </section>
   );
 }
 
