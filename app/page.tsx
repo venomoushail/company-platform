@@ -52,6 +52,9 @@ const emptyMetrics: DashboardMetrics = {
   totalAssignments: 0,
   completedAssignments: 0,
 };
+// Developer-only auth diagnostics for future deployment troubleshooting.
+const isAuthDebugEnabled =
+  process.env.NODE_ENV === "development" || process.env.DEBUG_AUTH === "true";
 
 function getReadableErrorMessage(data: unknown, fallback: string) {
   if (!data || typeof data !== "object") return fallback;
@@ -169,14 +172,15 @@ export default function Home() {
 
       if (!isMounted) return;
 
-      // TODO remove after Vercel auth debugging.
-      console.info("[dashboard-auth-debug] client session", {
-        getSessionErrorMessage: error?.message ?? "",
-        sessionExists: Boolean(data.session),
-        accessTokenLength: data.session?.access_token.length ?? 0,
-        userEmail: data.session?.user.email ?? "",
-        fetchWillSendAuthorizationHeader: Boolean(data.session?.access_token),
-      });
+      if (isAuthDebugEnabled) {
+        console.info("[dashboard-auth-debug] client session", {
+          getSessionErrorMessage: error?.message ?? "",
+          sessionExists: Boolean(data.session),
+          accessTokenLength: data.session?.access_token.length ?? 0,
+          userEmail: data.session?.user.email ?? "",
+          fetchWillSendAuthorizationHeader: Boolean(data.session?.access_token),
+        });
+      }
 
       if (error || !data.session?.access_token) {
         setPageStatus("error");
@@ -240,14 +244,15 @@ export default function Home() {
     const { data, error } = await supabase.auth.getSession();
     const token = data.session?.access_token ?? "";
 
-    // TODO remove after Vercel auth debugging.
-    console.info("[dashboard-auth-debug] run button session", {
-      getSessionErrorMessage: error?.message ?? "",
-      sessionExists: Boolean(data.session),
-      accessTokenLength: token.length,
-      userEmail: data.session?.user.email ?? "",
-      fetchWillSendAuthorizationHeader: Boolean(token),
-    });
+    if (isAuthDebugEnabled) {
+      console.info("[dashboard-auth-debug] run button session", {
+        getSessionErrorMessage: error?.message ?? "",
+        sessionExists: Boolean(data.session),
+        accessTokenLength: token.length,
+        userEmail: data.session?.user.email ?? "",
+        fetchWillSendAuthorizationHeader: Boolean(token),
+      });
+    }
 
     const clientDebug = {
       getSessionErrorMessage: error?.message ?? "",
@@ -301,32 +306,33 @@ export default function Home() {
           </div>
         )}
 
-        {/* TODO remove after Vercel auth debugging. */}
-        <section className="rounded-xl bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-slate-900">
-                Auth Diagnostics
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Temporary Vercel session diagnostics.
-              </p>
+        {isAuthDebugEnabled && (
+          <section className="rounded-xl bg-white p-6 shadow-sm">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">
+                  Auth Diagnostics
+                </h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Developer-only deployment auth diagnostics.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleRunAuthDebug}
+                disabled={authDebugStatus === "loading"}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {authDebugStatus === "loading" ? "Running..." : "Run Auth Debug"}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={handleRunAuthDebug}
-              disabled={authDebugStatus === "loading"}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {authDebugStatus === "loading" ? "Running..." : "Run Auth Debug"}
-            </button>
-          </div>
-          {authDebugResult && (
-            <pre className="mt-4 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-950 p-4 text-xs leading-5 text-slate-100">
-              {JSON.stringify(authDebugResult, null, 2)}
-            </pre>
-          )}
-        </section>
+            {authDebugResult && (
+              <pre className="mt-4 max-h-96 overflow-auto rounded-lg border border-slate-200 bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+                {JSON.stringify(authDebugResult, null, 2)}
+              </pre>
+            )}
+          </section>
+        )}
 
         {pageStatus !== "error" && (
           <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-5">

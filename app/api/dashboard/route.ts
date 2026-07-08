@@ -32,6 +32,10 @@ function logServerError(message: string, error: unknown) {
   console.error(`[dashboard] ${message}`, error);
 }
 
+function isAuthDebugEnabled() {
+  return process.env.NODE_ENV !== "production" || process.env.DEBUG_AUTH === "true";
+}
+
 function validateSupabaseAdminEnv() {
   const { url, serviceRoleKey } = getSupabaseAdminConfig();
 
@@ -70,12 +74,13 @@ async function requireAdminContext(request: Request) {
 
   const token = getBearerToken(request);
 
-  // TODO remove after Vercel auth debugging.
-  console.info("[dashboard-auth-debug]", {
-    hasAuthorizationHeader: Boolean(request.headers.get("authorization")),
-    tokenLength: token?.length ?? 0,
-    nodeEnv: process.env.NODE_ENV,
-  });
+  if (isAuthDebugEnabled()) {
+    console.info("[dashboard-auth-debug]", {
+      hasAuthorizationHeader: Boolean(request.headers.get("authorization")),
+      tokenLength: token?.length ?? 0,
+      nodeEnv: process.env.NODE_ENV,
+    });
+  }
 
   if (!token) {
     return {
@@ -88,8 +93,7 @@ async function requireAdminContext(request: Request) {
   const supabase = createAdminSupabaseClient();
   const { data: userData, error: userError } = await supabase.auth.getUser(token);
 
-  // TODO remove after Vercel auth debugging.
-  if (userError || !userData.user) {
+  if (isAuthDebugEnabled() && (userError || !userData.user)) {
     console.info("[dashboard-auth-debug] getUser failed", {
       errorName: userError?.name ?? "",
       errorMessage: userError?.message ?? "No user returned.",

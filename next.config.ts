@@ -1,7 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  env: {
+    DEBUG_AUTH: process.env.DEBUG_AUTH ?? "false",
+  },
 };
 
 export default nextConfig;

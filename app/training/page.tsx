@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import AdminLayout from "@/components/layout/AdminLayout";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import type { TrainingModule } from "@/types/supabase";
@@ -10,6 +10,7 @@ type TrainingListResponse = {
 };
 
 type PageStatus = "idle" | "loading" | "success" | "error";
+type ActionStatus = "idle" | "loading" | "success" | "error";
 
 function getReadableErrorMessage(data: unknown, fallback: string) {
   if (!data || typeof data !== "object") return fallback;
@@ -45,53 +46,65 @@ export default function TrainingPage() {
   const [trainingModules, setTrainingModules] = useState<TrainingModule[]>([]);
   const [pageStatus, setPageStatus] = useState<PageStatus>("loading");
   const [pageError, setPageError] = useState("");
+  const [actionStatus, setActionStatus] = useState<ActionStatus>("idle");
+  const [actionMessage, setActionMessage] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<TrainingModule | null>(null);
+
+  const getAccessToken = useCallback(async () => {
+    const supabase = createBrowserSupabaseClient();
+
+    if (!supabase) {
+      throw new Error("Supabase environment variables are not configured.");
+    }
+
+    const { data, error } = await supabase.auth.getSession();
+
+    if (error || !data.session?.access_token) {
+      throw new Error(error?.message || "Sign in to manage training modules.");
+    }
+
+    return data.session.access_token;
+  }, []);
+
+  const loadTrainingModules = useCallback(async (showLoading = true) => {
+    if (showLoading) setPageStatus("loading");
+    setPageError("");
+
+    const token = await getAccessToken();
+    const response = await fetch("/api/training", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    const responseData = (await response.json().catch(() => null)) as
+      | TrainingListResponse
+      | { error?: string }
+      | null;
+
+    if (!response.ok) {
+      throw new Error(
+        getReadableErrorMessage(responseData, "Unable to load training modules.")
+      );
+    }
+
+    setTrainingModules((responseData as TrainingListResponse).modules);
+    setPageStatus("success");
+  }, [getAccessToken]);
 
   useEffect(() => {
     let isMounted = true;
 
     async function fetchTrainingModules() {
-      const supabase = createBrowserSupabaseClient();
-
-      if (!supabase) {
+      try {
+        await loadTrainingModules();
+      } catch (error) {
         if (!isMounted) return;
 
         setPageStatus("error");
-        setPageError("Supabase environment variables are not configured.");
-        return;
-      }
-
-      const { data, error } = await supabase.auth.getSession();
-
-      if (!isMounted) return;
-
-      if (error || !data.session?.access_token) {
-        setPageStatus("error");
-        setPageError(error?.message || "Sign in to view training modules.");
-        return;
-      }
-
-      const response = await fetch("/api/training", {
-        headers: {
-          Authorization: `Bearer ${data.session.access_token}`,
-        },
-      });
-      const responseData = (await response.json().catch(() => null)) as
-        | TrainingListResponse
-        | { error?: string }
-        | null;
-
-      if (!isMounted) return;
-
-      if (!response.ok) {
-        setPageStatus("error");
         setPageError(
-          getReadableErrorMessage(responseData, "Unable to load training modules.")
+          error instanceof Error ? error.message : "Unable to load training modules."
         );
-        return;
       }
-
-      setTrainingModules((responseData as TrainingListResponse).modules);
-      setPageStatus("success");
     }
 
     fetchTrainingModules();
@@ -99,7 +112,104 @@ export default function TrainingPage() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [loadTrainingModules]);
+
+  async function handleArchiveTraining(trainingModule: TrainingModule) {
+    setActionStatus("loading");
+    setActionMessage("");
+    setPageError("");
+
+    try {
+      const token = await getAccessToken();
+      const response = await fetch(
+        `/api/training/${encodeURIComponent(trainingModule.id)}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ status: "archived" }),
+        }
+      );
+      const responseData = (await response.json().catch(() => null)) as
+        | { module?: TrainingModule }
+        | { error?: string }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(
+          getReadableErrorMessage(responseData, "Unable to archive the training.")
+        );
+      }
+
+      setActionStatus("success");
+      setActionMessage(`Archived "${trainingModule.title}".`);
+      await loadTrainingModules(false);
+    } catch (error) {
+      setActionStatus("error");
+      setActionMessage(
+        error instanceof Error ? error.message : "Unable to archive the training."
+      );
+    }
+  }
+
+  function handleDeleteTrainingClick(trainingModule: TrainingModule) {
+    setActionMessage("");
+
+    if (trainingModule.status !== "draft") {
+      setActionStatus("error");
+      setActionMessage(
+        "Published trainings cannot be deleted. Archive this training instead."
+      );
+      return;
+    }
+
+    setDeleteTarget(trainingModule);
+  }
+
+  async function handleConfirmDeleteTraining() {
+    if (!deleteTarget) return;
+
+    const trainingModule = deleteTarget;
+
+    setActionStatus("loading");
+    setActionMessage("");
+    setPageError("");
+
+    try {
+      const token = await getAccessToken();
+      const response = await fetch(
+        `/api/training/${encodeURIComponent(trainingModule.id)}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+      const responseData = (await response.json().catch(() => null)) as
+        | { success?: boolean }
+        | { error?: string }
+        | null;
+
+      if (!response.ok) {
+        throw new Error(
+          getReadableErrorMessage(responseData, "Unable to delete the training.")
+        );
+      }
+
+      setDeleteTarget(null);
+      setActionStatus("success");
+      setActionMessage(`Deleted "${trainingModule.title}".`);
+      await loadTrainingModules(false);
+    } catch (error) {
+      setActionStatus("error");
+      setActionMessage(
+        error instanceof Error ? error.message : "Unable to delete the training."
+      );
+    }
+  }
 
   return (
     <AdminLayout
@@ -135,6 +245,18 @@ export default function TrainingPage() {
       {pageError && (
         <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
           {pageError}
+        </div>
+      )}
+
+      {actionMessage && (
+        <div
+          className={`mb-6 rounded-lg border px-4 py-3 text-sm font-medium ${
+            actionStatus === "success"
+              ? "border-green-200 bg-green-50 text-green-700"
+              : "border-red-200 bg-red-50 text-red-700"
+          }`}
+        >
+          {actionMessage}
         </div>
       )}
 
@@ -183,60 +305,82 @@ export default function TrainingPage() {
                 </td>
               </tr>
             ) : (
-              trainingModules.map((module) => (
+              trainingModules.map((trainingModule) => (
                 <tr
-                  key={module.id}
+                  key={trainingModule.id}
                   className="border-b border-slate-100 last:border-0 hover:bg-slate-50"
                 >
                   <td className="px-6 py-4">
                     <p className="font-medium text-slate-900">
-                      {module.title}
+                      {trainingModule.title}
                     </p>
                   </td>
 
                   <td className="px-6 py-4 text-sm text-slate-600">
-                    {module.category || "Uncategorized"}
+                    {trainingModule.category || "Uncategorized"}
                   </td>
 
                   <td className="px-6 py-4 text-sm text-slate-600">
-                    {formatAudience(module.training_audience)}
+                    {formatAudience(trainingModule.training_audience)}
                   </td>
 
                   <td className="px-6 py-4 text-sm text-slate-600">
-                    {module.estimated_minutes === null
+                    {trainingModule.estimated_minutes === null
                       ? "Not set"
-                      : `${module.estimated_minutes} min`}
+                      : `${trainingModule.estimated_minutes} min`}
                   </td>
 
                   <td className="px-6 py-4 text-sm text-slate-600">
-                    {module.days_allowed === null
+                    {trainingModule.days_allowed === null
                       ? "Not set"
-                      : `${module.days_allowed} days`}
+                      : `${trainingModule.days_allowed} days`}
                   </td>
 
                   <td className="px-6 py-4">
                     <span
                       className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                        module.status === "published"
+                        trainingModule.status === "published"
                           ? "bg-green-100 text-green-700"
+                          : trainingModule.status === "archived"
+                            ? "bg-slate-100 text-slate-600"
                           : "bg-yellow-100 text-yellow-700"
                       }`}
                     >
-                      {formatStatus(module.status)}
+                      {formatStatus(trainingModule.status)}
                     </span>
                   </td>
 
                   <td className="px-6 py-4 text-sm text-slate-600">
-                    {formatUpdatedDate(module.updated_at)}
+                    {formatUpdatedDate(trainingModule.updated_at)}
                   </td>
 
-                  <td className="px-6 py-4 text-right">
-                    <a
-                      href={`/training/new?id=${module.id}`}
-                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white"
-                    >
-                      Edit
-                    </a>
+                  <td className="px-6 py-4">
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <a
+                        href={`/training/new?id=${trainingModule.id}`}
+                        className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white"
+                      >
+                        Edit
+                      </a>
+                      {trainingModule.status !== "archived" && (
+                        <button
+                          type="button"
+                          disabled={actionStatus === "loading"}
+                          onClick={() => handleArchiveTraining(trainingModule)}
+                          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Archive
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={actionStatus === "loading"}
+                        onClick={() => handleDeleteTrainingClick(trainingModule)}
+                        className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))
@@ -244,6 +388,41 @@ export default function TrainingPage() {
           </tbody>
         </table>
       </div>
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+            <h2 className="text-lg font-bold text-slate-900">
+              Delete this training?
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-slate-600">
+              This will remove its slides, quiz questions, assignments, progress, and
+              quiz attempts.
+            </p>
+            <p className="mt-3 break-words text-sm font-semibold text-slate-900">
+              {deleteTarget.title}
+            </p>
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={actionStatus === "loading"}
+                onClick={() => setDeleteTarget(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={actionStatus === "loading"}
+                onClick={handleConfirmDeleteTraining}
+                className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {actionStatus === "loading" ? "Deleting..." : "Delete Training"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AdminLayout>
   );
 }

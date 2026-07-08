@@ -3,6 +3,10 @@ import { createAdminSupabaseClient, getSupabaseAdminConfig } from "@/lib/supabas
 
 export const dynamic = "force-dynamic";
 
+function isAuthDebugEnabled() {
+  return process.env.NODE_ENV !== "production" || process.env.DEBUG_AUTH === "true";
+}
+
 function getBearerToken(request: Request) {
   const authHeader = request.headers.get("authorization");
 
@@ -21,8 +25,13 @@ function getSupabaseUrlHostname(url: string | undefined) {
   }
 }
 
-// TODO remove after Vercel auth debugging.
+// Developer-only auth diagnostics for future deployment/auth troubleshooting.
+// In production, set DEBUG_AUTH=true to temporarily re-enable this endpoint.
 export async function GET(request: Request) {
+  if (!isAuthDebugEnabled()) {
+    return new Response(null, { status: 404 });
+  }
+
   const authorizationHeader = request.headers.get("authorization");
   const token = getBearerToken(request);
   const { url, anonKey, serviceRoleKey } = getSupabaseAdminConfig();
