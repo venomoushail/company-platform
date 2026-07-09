@@ -6,6 +6,7 @@ import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
 } from "@/lib/supabase/admin";
+import { applyAssignmentRulesForEmployee } from "@/lib/training/assignmentRules";
 import type { Location, Position, Profile, ProfileRole } from "@/types/supabase";
 
 export const dynamic = "force-dynamic";
@@ -338,6 +339,12 @@ async function replaceManagerLocations(
 
 function readEmployeeId(payload: EmployeePayload) {
   return readString(payload.id);
+}
+
+function havePositionIdsChanged(previousIds: Set<string>, nextIds: string[]) {
+  if (previousIds.size !== nextIds.length) return true;
+
+  return nextIds.some((positionId) => !previousIds.has(positionId));
 }
 
 export async function GET(request: Request) {
@@ -687,6 +694,16 @@ export async function POST(request: Request) {
     }
   }
 
+  try {
+    await applyAssignmentRulesForEmployee(authData.user.id, "hire", {
+      supabase,
+      assignedBy: profile.id,
+    });
+  } catch (assignmentRulesError) {
+    logServerError("Default training assignment failed", assignmentRulesError);
+    return jsonError("Employee was created, but default trainings could not be assigned.", 500);
+  }
+
   return NextResponse.json({ employee }, { status: 201 });
 }
 
@@ -798,6 +815,10 @@ export async function PATCH(request: Request) {
 
   const existingPositionIds = new Set(
     (existingPositionAssignments ?? []).map((assignment) => assignment.position_id)
+  );
+  const didPositionChange = havePositionIdsChanged(
+    existingPositionIds,
+    values.positionIds
   );
 
   if (values.positionIds.length > 0) {
@@ -987,6 +1008,25 @@ export async function PATCH(request: Request) {
       );
       return jsonError("Unable to update managed locations. Please try again.", 500);
     }
+  }
+
+  try {
+    if (didPositionChange) {
+      await applyAssignmentRulesForEmployee(employeeId, "position_change", {
+        supabase,
+        assignedBy: profile.id,
+      });
+    }
+
+    if (didLocationChange) {
+      await applyAssignmentRulesForEmployee(employeeId, "location_change", {
+        supabase,
+        assignedBy: profile.id,
+      });
+    }
+  } catch (assignmentRulesError) {
+    logServerError("Default training assignment update failed", assignmentRulesError);
+    return jsonError("Employee was updated, but default trainings could not be assigned.", 500);
   }
 
   return NextResponse.json({

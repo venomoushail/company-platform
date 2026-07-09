@@ -132,12 +132,36 @@ export type TrainingAssignment = {
   status: "not_started" | "in_progress" | "completed" | "failed";
   progress_percent: number;
   assigned_at: string;
+  due_date: string | null;
   started_at: string | null;
   completed_at: string | null;
   latest_score: number | null;
   passed: boolean | null;
   assigned_by: string | null;
   completion_email_sent_at: string | null;
+};
+
+export type TrainingAssignmentRuleType =
+  | "all_employees"
+  | "position"
+  | "location"
+  | "position_location";
+
+export type TrainingAssignmentRule = {
+  id: string;
+  company_id: string;
+  module_id: string;
+  rule_type: TrainingAssignmentRuleType;
+  position_id: string | null;
+  location_id: string | null;
+  assign_on_hire: boolean;
+  assign_on_position_change: boolean;
+  assign_on_location_change: boolean;
+  days_allowed: number | null;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type QuizAttempt = {
@@ -177,6 +201,7 @@ export type Profile = {
   first_name: string;
   last_name: string;
   hire_date: string | null;
+  last_login_at: string | null;
   full_name: string;
   preferred_name: string | null;
   company_id: string;
@@ -214,8 +239,9 @@ export type Database = {
       };
       profiles: {
         Row: Profile;
-        Insert: Omit<Profile, "created_at" | "full_name"> & {
+        Insert: Omit<Profile, "created_at" | "last_login_at" | "full_name"> & {
           created_at?: string;
+          last_login_at?: string | null;
           full_name?: string;
         };
         Update: Partial<Omit<Profile, "id">>;
@@ -446,10 +472,11 @@ export type Database = {
         Row: TrainingAssignment;
         Insert: Omit<
           TrainingAssignment,
-          "id" | "assigned_at" | "completion_email_sent_at"
+          "id" | "assigned_at" | "due_date" | "completion_email_sent_at"
         > & {
           id?: string;
           assigned_at?: string;
+          due_date?: string | null;
           completion_email_sent_at?: string | null;
         };
         Update: Partial<Omit<TrainingAssignment, "id" | "employee_id" | "module_id" | "assigned_by">>;
@@ -466,6 +493,57 @@ export type Database = {
             columns: ["module_id"];
             isOneToOne: false;
             referencedRelation: "training_modules";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      training_assignment_rules: {
+        Row: TrainingAssignmentRule;
+        Insert: Omit<
+          TrainingAssignmentRule,
+          "id" | "created_at" | "updated_at"
+        > & {
+          id?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<
+          Omit<TrainingAssignmentRule, "id" | "company_id" | "created_by" | "created_at">
+        >;
+        Relationships: [
+          {
+            foreignKeyName: "training_assignment_rules_company_id_fkey";
+            columns: ["company_id"];
+            isOneToOne: false;
+            referencedRelation: "companies";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "training_assignment_rules_module_id_fkey";
+            columns: ["module_id"];
+            isOneToOne: false;
+            referencedRelation: "training_modules";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "training_assignment_rules_position_id_fkey";
+            columns: ["position_id"];
+            isOneToOne: false;
+            referencedRelation: "positions";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "training_assignment_rules_location_id_fkey";
+            columns: ["location_id"];
+            isOneToOne: false;
+            referencedRelation: "locations";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "training_assignment_rules_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
             referencedColumns: ["id"];
           },
         ];

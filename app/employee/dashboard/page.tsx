@@ -35,6 +35,7 @@ type TrainingStatus = {
   attempt_count: number;
   can_retake: boolean;
   assigned_at: string | null;
+  due_date: string | null;
   started_at: string | null;
   completed_at: string | null;
   action_label:
@@ -130,12 +131,21 @@ function pluralize(count: number, singular: string, plural = `${singular}s`) {
 }
 
 function isOverdueTraining(module: TrainingModule, status: TrainingStatus | undefined) {
-  if (!status?.assigned_at || !module.days_allowed || status.status === "completed") {
+  if (!status?.assigned_at || status.status === "completed") {
     return false;
   }
 
-  const dueDate = new Date(status.assigned_at);
-  dueDate.setDate(dueDate.getDate() + module.days_allowed);
+  const dueDate = status.due_date
+    ? new Date(status.due_date)
+    : module.days_allowed
+      ? new Date(status.assigned_at)
+      : null;
+
+  if (!dueDate) return false;
+
+  if (!status.due_date && module.days_allowed) {
+    dueDate.setDate(dueDate.getDate() + module.days_allowed);
+  }
 
   return dueDate < new Date();
 }

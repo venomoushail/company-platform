@@ -44,6 +44,17 @@ export default function LoginForm() {
       return;
     }
 
+    if (signInData.session?.access_token) {
+      await fetch("/api/auth/last-login", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${signInData.session.access_token}`,
+        },
+      }).catch((lastLoginError) => {
+        console.error("[login] Last login update failed", lastLoginError);
+      });
+    }
+
     const { data: profile, error: profileError } = await supabase
       .from("profiles")
       .select("role")

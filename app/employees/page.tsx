@@ -49,7 +49,8 @@ type SortKey =
   | "positions"
   | "location"
   | "status"
-  | "hire_date";
+  | "hire_date"
+  | "last_login_at";
 
 type SortDirection = "asc" | "desc";
 
@@ -98,6 +99,18 @@ function formatDate(date: string | null) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(`${date}T00:00:00`));
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "Never";
+
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 function normalize(value: string) {
@@ -191,6 +204,10 @@ function getEmployeeSortValue(
 
   if (sortKey === "status") {
     return employee.is_active ? "active" : "inactive";
+  }
+
+  if (sortKey === "last_login_at") {
+    return employee.last_login_at ?? "";
   }
 
   return employee[sortKey] ?? "";
@@ -469,6 +486,9 @@ export default function EmployeesPage() {
   );
 
   const isEditMode = editingEmployeeId !== null;
+  const editingEmployee = editingEmployeeId
+    ? employees.find((employee) => employee.id === editingEmployeeId) ?? null
+    : null;
   const canSetTestPassword = adminProfile?.role === "admin";
   const canEditManagedLocations = adminProfile?.role === "admin";
   const selectableLocations = useMemo(
@@ -1373,6 +1393,14 @@ export default function EmployeesPage() {
                   />
                 </FormField>
 
+                {isEditMode && (
+                  <FormField label="Last Login">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">
+                      {formatDateTime(editingEmployee?.last_login_at ?? null)}
+                    </div>
+                  </FormField>
+                )}
+
                 <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
                   <label className="flex items-center gap-3 text-sm font-semibold text-slate-700">
                     <input
@@ -1543,7 +1571,7 @@ export default function EmployeesPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1280px] border-collapse text-left">
+              <table className="w-full min-w-[1420px] border-collapse text-left">
                 <thead className="border-b border-slate-200 bg-slate-50">
                   <tr>
                     <SortableTableHeader
@@ -1602,6 +1630,13 @@ export default function EmployeesPage() {
                       onSort={updateSort}
                     >
                       Hire Date
+                    </SortableTableHeader>
+                    <SortableTableHeader
+                      sortKey="last_login_at"
+                      sortState={sortState}
+                      onSort={updateSort}
+                    >
+                      Last Login
                     </SortableTableHeader>
                     <TableHeader className="w-28 text-right">Actions</TableHeader>
                   </tr>
@@ -1668,6 +1703,7 @@ export default function EmployeesPage() {
                         </span>
                       </TableCell>
                       <TableCell>{formatDate(employee.hire_date)}</TableCell>
+                      <TableCell>{formatDateTime(employee.last_login_at)}</TableCell>
                       <td className="relative px-6 py-4 text-right text-sm text-slate-600">
                         <div className="inline-block text-left">
                           <button

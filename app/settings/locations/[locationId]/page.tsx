@@ -20,7 +20,13 @@ type LocationMetrics = {
 
 type LocationEmployee = Pick<
   Profile,
-  "id" | "full_name" | "preferred_name" | "email" | "role" | "is_active"
+  | "id"
+  | "full_name"
+  | "preferred_name"
+  | "email"
+  | "role"
+  | "is_active"
+  | "last_login_at"
 > & {
   positions: Position[];
   latest_training_status: TrainingAssignment["status"] | null;
@@ -83,6 +89,18 @@ function formatDate(value: string) {
     month: "short",
     day: "numeric",
     year: "numeric",
+  }).format(new Date(value));
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "Never";
+
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
   }).format(new Date(value));
 }
 
@@ -351,6 +369,7 @@ function EmployeeSection({ employees }: { employees: LocationEmployee[] }) {
               <th className="px-5 py-3">Role</th>
               <th className="px-5 py-3">Position(s)</th>
               <th className="px-5 py-3">Status</th>
+              <th className="px-5 py-3">Last Login</th>
               <th className="px-5 py-3">Latest Training</th>
               <th className="px-5 py-3 text-right">Actions</th>
             </tr>
@@ -380,6 +399,9 @@ function EmployeeSection({ employees }: { employees: LocationEmployee[] }) {
                   >
                     {employee.is_active ? "Active" : "Inactive"}
                   </span>
+                </td>
+                <td className="px-5 py-4 text-slate-700">
+                  {formatDateTime(employee.last_login_at)}
                 </td>
                 <td className="px-5 py-4">
                   <span
@@ -412,7 +434,7 @@ function EmployeeSection({ employees }: { employees: LocationEmployee[] }) {
             {employees.length === 0 && (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={8}
                   className="px-5 py-10 text-center text-sm font-medium text-slate-500"
                 >
                   No employees are assigned to this location.

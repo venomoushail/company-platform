@@ -44,6 +44,7 @@ type TrainingStatus = {
   attempt_count: number;
   can_retake: boolean;
   assigned_at: string | null;
+  due_date: string | null;
   started_at: string | null;
   completed_at: string | null;
   action_label:
@@ -189,17 +190,38 @@ async function fetchCompany(
   return data ?? null;
 }
 
-function fetchPublishedModules(
+async function fetchAvailablePublishedModules(
   supabase: ReturnType<typeof createAdminSupabaseClient>,
-  companyId: string
+  companyId: string,
+  employeeId: string
 ) {
-  return supabase
-    .from("training_modules")
-    .select("*")
-    .eq("company_id", companyId)
-    .eq("status", "published")
-    .eq("training_audience", "all")
-    .order("updated_at", { ascending: false });
+  const [modulesResult, assignmentsResult] = await Promise.all([
+    supabase
+      .from("training_modules")
+      .select("*")
+      .eq("company_id", companyId)
+      .eq("status", "published")
+      .order("updated_at", { ascending: false }),
+    supabase
+      .from("training_assignments")
+      .select("module_id")
+      .eq("employee_id", employeeId),
+  ]);
+
+  if (modulesResult.error) return modulesResult;
+  if (assignmentsResult.error) return assignmentsResult;
+
+  const assignedModuleIds = new Set(
+    (assignmentsResult.data ?? []).map((assignment) => assignment.module_id)
+  );
+
+  return {
+    data: (modulesResult.data ?? []).filter(
+      (module) =>
+        module.training_audience === "all" || assignedModuleIds.has(module.id)
+    ),
+    error: null,
+  };
 }
 
 function fetchPublishedModule(
@@ -213,7 +235,6 @@ function fetchPublishedModule(
     .eq("id", moduleId)
     .eq("company_id", companyId)
     .eq("status", "published")
-    .eq("training_audience", "all")
     .maybeSingle();
 }
 
@@ -250,6 +271,18 @@ async function fetchAssignments(
   }
 
   return data ?? [];
+}
+
+async function canAccessPublishedModule(
+  supabase: ReturnType<typeof createAdminSupabaseClient>,
+  employeeId: string,
+  module: TrainingModule
+) {
+  if (module.training_audience === "all") return true;
+
+  const assignments = await fetchAssignments(supabase, employeeId, [module.id]);
+
+  return assignments.length > 0;
 }
 
 async function fetchAttempts(
@@ -320,6 +353,7 @@ function buildTrainingStatus(
       attempt_count: attempts.length,
       can_retake: false,
       assigned_at: assignment?.assigned_at ?? null,
+      due_date: assignment?.due_date ?? null,
       started_at: assignment?.started_at ?? null,
       completed_at: assignment?.completed_at ?? null,
       action_label: "Review Training",
@@ -339,6 +373,7 @@ function buildTrainingStatus(
       attempt_count: attempts.length,
       can_retake: canRetake,
       assigned_at: assignment?.assigned_at ?? null,
+      due_date: assignment?.due_date ?? null,
       started_at: assignment?.started_at ?? null,
       completed_at: assignment?.completed_at ?? null,
       action_label: canRetake ? "Retake Quiz" : "Review Training",
@@ -358,6 +393,7 @@ function buildTrainingStatus(
       attempt_count: attempts.length,
       can_retake: false,
       assigned_at: assignment?.assigned_at ?? null,
+      due_date: assignment?.due_date ?? null,
       started_at: assignment?.started_at ?? null,
       completed_at: assignment?.completed_at ?? null,
       action_label: "Start Quiz",
@@ -377,6 +413,7 @@ function buildTrainingStatus(
       attempt_count: attempts.length,
       can_retake: false,
       assigned_at: assignment?.assigned_at ?? null,
+      due_date: assignment?.due_date ?? null,
       started_at: assignment?.started_at ?? null,
       completed_at: assignment?.completed_at ?? null,
       action_label: "Continue Training",
@@ -395,6 +432,7 @@ function buildTrainingStatus(
     attempt_count: attempts.length,
     can_retake: false,
     assigned_at: assignment?.assigned_at ?? null,
+    due_date: assignment?.due_date ?? null,
     started_at: assignment?.started_at ?? null,
     completed_at: assignment?.completed_at ?? null,
     action_label: "Start Training",
@@ -487,7 +525,7 @@ async function ensureStartedAssignment(
         started_at: now,
         completed_at: null,
         latest_score: null,
-        passed: null,
+        passed: false,
         assigned_by: null,
       })
       .select("*")
@@ -892,6 +930,10 @@ export async function GET(request: Request) {
       return jsonError("Training module not found.", 404);
     }
 
+    if (!(await canAccessPublishedModule(supabase, profile.id, module))) {
+      return jsonError("Training module not found.", 404);
+    }
+
     let assignment: TrainingAssignment;
 
     try {
@@ -941,9 +983,10 @@ export async function GET(request: Request) {
     });
   }
 
-  const { data: modules, error } = await fetchPublishedModules(
+  const { data: modules, error } = await fetchAvailablePublishedModules(
     supabase,
-    profile.company_id
+    profile.company_id,
+    profile.id
   );
 
   if (error) {
@@ -1001,6 +1044,10 @@ export async function POST(request: Request) {
   }
 
   if (!module) {
+    return jsonError("Training module not found.", 404);
+  }
+
+  if (!(await canAccessPublishedModule(supabase, profile.id, module))) {
     return jsonError("Training module not found.", 404);
   }
 

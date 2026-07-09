@@ -11,11 +11,17 @@ import {
 } from "react";
 import { useSearchParams } from "next/navigation";
 import AdminLayout from "@/components/layout/AdminLayout";
+import AssignmentRulesPanel from "@/components/settings/AssignmentRulesPanel";
 import { useCompanyTheme } from "@/components/theme/CompanyThemeProvider";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import type { Company, Location, Position } from "@/types/supabase";
 
-type SettingsTab = "company" | "branding" | "locations" | "positions";
+type SettingsTab =
+  | "company"
+  | "branding"
+  | "locations"
+  | "positions"
+  | "assignment-rules";
 
 type CompanySettingsValues = Pick<
   Company,
@@ -72,6 +78,7 @@ const tabs: { id: SettingsTab; label: string }[] = [
   { id: "branding", label: "Branding" },
   { id: "locations", label: "Locations" },
   { id: "positions", label: "Positions" },
+  { id: "assignment-rules", label: "Assignment Rules" },
 ];
 
 function isSettingsTab(tab: string | null): tab is SettingsTab {
@@ -418,7 +425,7 @@ function SettingsContent() {
     >
       <div className="space-y-6">
         <div className="rounded-xl border border-slate-200 bg-white p-2 shadow-sm">
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
@@ -481,6 +488,7 @@ function SettingsContent() {
 
         {activeTab === "locations" && <LocationsPanel />}
         {activeTab === "positions" && <PositionsPanel />}
+        {activeTab === "assignment-rules" && <AssignmentRulesPanel />}
       </div>
     </AdminLayout>
   );

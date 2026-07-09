@@ -17,7 +17,13 @@ type SupabaseAdminClient = ReturnType<typeof createAdminSupabaseClient>;
 
 type EmployeeDetailRow = Pick<
   Profile,
-  "id" | "full_name" | "preferred_name" | "email" | "role" | "is_active"
+  | "id"
+  | "full_name"
+  | "preferred_name"
+  | "email"
+  | "role"
+  | "is_active"
+  | "last_login_at"
 > & {
   positions: Position[];
   latest_training_status: TrainingAssignment["status"] | null;
@@ -50,12 +56,21 @@ function isAssignmentPastDue(
   trainingModule: TrainingModule | undefined,
   todayStart: Date
 ) {
-  if (assignment.status === "completed" || !trainingModule?.days_allowed) {
+  if (assignment.status === "completed") {
     return false;
   }
 
-  const dueDate = new Date(assignment.assigned_at);
-  dueDate.setDate(dueDate.getDate() + trainingModule.days_allowed);
+  const dueDate = assignment.due_date
+    ? new Date(assignment.due_date)
+    : trainingModule?.days_allowed
+      ? new Date(assignment.assigned_at)
+      : null;
+
+  if (!dueDate) return false;
+
+  if (!assignment.due_date && trainingModule?.days_allowed) {
+    dueDate.setDate(dueDate.getDate() + trainingModule.days_allowed);
+  }
 
   return dueDate < todayStart;
 }
@@ -164,6 +179,7 @@ function buildEmployeeRows(
       email: employee.email,
       role: employee.role,
       is_active: employee.is_active,
+      last_login_at: employee.last_login_at,
       positions: [...(positionsByEmployeeId.get(employee.id) ?? [])].sort(
         (left, right) => left.name.localeCompare(right.name)
       ),

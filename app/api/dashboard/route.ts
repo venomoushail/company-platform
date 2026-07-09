@@ -153,12 +153,21 @@ function isAssignmentPastDue(
   trainingModule: TrainingModule | undefined,
   todayStart: Date
 ) {
-  if (assignment.status === "completed" || !trainingModule?.days_allowed) {
+  if (assignment.status === "completed") {
     return false;
   }
 
-  const dueDate = new Date(assignment.assigned_at);
-  dueDate.setDate(dueDate.getDate() + trainingModule.days_allowed);
+  const dueDate = assignment.due_date
+    ? new Date(assignment.due_date)
+    : trainingModule?.days_allowed
+      ? new Date(assignment.assigned_at)
+      : null;
+
+  if (!dueDate) return false;
+
+  if (!assignment.due_date && trainingModule?.days_allowed) {
+    dueDate.setDate(dueDate.getDate() + trainingModule.days_allowed);
+  }
 
   return dueDate < todayStart;
 }
