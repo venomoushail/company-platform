@@ -3,10 +3,13 @@ import { requireAdminAreaContext, jsonError } from "@/lib/auth/api";
 import type {
   Location,
   Position,
+  Profile,
   TrainingAssignmentRule,
   TrainingAssignmentRuleType,
   TrainingModule,
 } from "@/types/supabase";
+import type { DataScope } from "@/lib/auth/scope";
+import { canAccessEmployee } from "@/lib/auth/scope";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +37,7 @@ type AssignmentRuleWithDetails = TrainingAssignmentRule & {
   module: Pick<TrainingModule, "id" | "title" | "status"> | null;
   position: Pick<Position, "id" | "name"> | null;
   location: Pick<Location, "id" | "name" | "store_number"> | null;
+  current_match_count: number;
 };
 
 function readString(value: unknown) {
@@ -117,7 +121,8 @@ async function validateCompanyReferences(
     Awaited<ReturnType<typeof requireAdminAreaContext>>["supabase"]
   >,
   companyId: string,
-  values: ReturnType<typeof validateRulePayload>["values"]
+  values: ReturnType<typeof validateRulePayload>["values"],
+  requireActiveTargets = false
 ) {
   const [moduleResult, positionResult, locationResult] = await Promise.all([
     supabase
@@ -130,7 +135,7 @@ async function validateCompanyReferences(
     values.positionId
       ? supabase
           .from("positions")
-          .select("id")
+          .select("id,is_active")
           .eq("id", values.positionId)
           .eq("company_id", companyId)
           .maybeSingle()
@@ -138,7 +143,7 @@ async function validateCompanyReferences(
     values.locationId
       ? supabase
           .from("locations")
-          .select("id")
+          .select("id,is_active")
           .eq("id", values.locationId)
           .eq("company_id", companyId)
           .maybeSingle()
@@ -166,6 +171,22 @@ async function validateCompanyReferences(
 
   if (values.locationId && !locationResult.data) {
     fieldErrors.location_id = "Choose a company location.";
+  }
+
+  if (
+    requireActiveTargets &&
+    positionResult.data &&
+    !positionResult.data.is_active
+  ) {
+    fieldErrors.position_id = "Choose an active company position.";
+  }
+
+  if (
+    requireActiveTargets &&
+    locationResult.data &&
+    !locationResult.data.is_active
+  ) {
+    fieldErrors.location_id = "Choose an active company location.";
   }
 
   return {
@@ -197,30 +218,37 @@ async function fetchRulesWithDetails(
   supabase: NonNullable<
     Awaited<ReturnType<typeof requireAdminAreaContext>>["supabase"]
   >,
-  companyId: string
+  scope: DataScope,
+  moduleId: string | null = null
 ) {
+  let rulesQuery = supabase
+    .from("training_assignment_rules")
+    .select("*")
+    .eq("company_id", scope.companyId)
+    .order("created_at", { ascending: false });
+
+  if (moduleId) {
+    rulesQuery = rulesQuery.eq("module_id", moduleId);
+  }
+
   const [rulesResult, modulesResult, positionsResult, locationsResult] =
     await Promise.all([
-      supabase
-        .from("training_assignment_rules")
-        .select("*")
-        .eq("company_id", companyId)
-        .order("created_at", { ascending: false }),
+      rulesQuery,
       supabase
         .from("training_modules")
         .select("id,title,status")
-        .eq("company_id", companyId)
+        .eq("company_id", scope.companyId)
         .in("status", ["draft", "published"])
         .order("title", { ascending: true }),
       supabase
         .from("positions")
         .select("*")
-        .eq("company_id", companyId)
+        .eq("company_id", scope.companyId)
         .order("name", { ascending: true }),
       supabase
         .from("locations")
         .select("*")
-        .eq("company_id", companyId)
+        .eq("company_id", scope.companyId)
         .order("store_number", { ascending: true }),
     ]);
 
@@ -248,11 +276,17 @@ async function fetchRulesWithDetails(
   const moduleById = new Map(modules.map((module) => [module.id, module]));
   const positionById = new Map(positions.map((position) => [position.id, position]));
   const locationById = new Map(locations.map((location) => [location.id, location]));
+  const matchCounts = await getRuleMatchCounts(
+    supabase,
+    scope,
+    rulesResult.data ?? []
+  );
   const rules = (rulesResult.data ?? []).map<AssignmentRuleWithDetails>((rule) => ({
     ...rule,
     module: moduleById.get(rule.module_id) ?? null,
     position: rule.position_id ? positionById.get(rule.position_id) ?? null : null,
     location: rule.location_id ? locationById.get(rule.location_id) ?? null : null,
+    current_match_count: matchCounts.get(rule.id) ?? 0,
   }));
 
   return {
@@ -266,6 +300,84 @@ async function fetchRulesWithDetails(
   };
 }
 
+function ruleMatchesEmployee(
+  rule: TrainingAssignmentRule,
+  employee: Profile,
+  positionIds: Set<string>
+) {
+  if (rule.rule_type === "all_employees") return true;
+  if (rule.rule_type === "position") {
+    return Boolean(rule.position_id && positionIds.has(rule.position_id));
+  }
+  if (rule.rule_type === "location") {
+    return Boolean(rule.location_id && rule.location_id === employee.location_id);
+  }
+
+  return Boolean(
+    rule.position_id &&
+      positionIds.has(rule.position_id) &&
+      rule.location_id &&
+      rule.location_id === employee.location_id
+  );
+}
+
+async function getRuleMatchCounts(
+  supabase: NonNullable<
+    Awaited<ReturnType<typeof requireAdminAreaContext>>["supabase"]
+  >,
+  scope: DataScope,
+  rules: TrainingAssignmentRule[]
+) {
+  const counts = new Map<string, number>();
+
+  if (rules.length === 0) return counts;
+
+  const [{ data: employees, error: employeesError }, positionsResult] =
+    await Promise.all([
+      supabase
+        .from("profiles")
+        .select("*")
+        .eq("company_id", scope.companyId)
+        .eq("is_active", true),
+      supabase.from("employee_positions").select("employee_id,position_id"),
+    ]);
+
+  if (employeesError || positionsResult.error) {
+    console.error("[assignment-rules] Match count lookup failed", {
+      employeesError,
+      positionsError: positionsResult.error,
+    });
+    return counts;
+  }
+
+  const positionsByEmployee = new Map<string, Set<string>>();
+
+  for (const position of positionsResult.data ?? []) {
+    const existing = positionsByEmployee.get(position.employee_id) ?? new Set<string>();
+    existing.add(position.position_id);
+    positionsByEmployee.set(position.employee_id, existing);
+  }
+
+  const scopedEmployees = (employees ?? []).filter((employee) =>
+    canAccessEmployee(scope, employee)
+  );
+
+  for (const rule of rules) {
+    counts.set(
+      rule.id,
+      scopedEmployees.filter((employee) =>
+        ruleMatchesEmployee(
+          rule,
+          employee,
+          positionsByEmployee.get(employee.id) ?? new Set<string>()
+        )
+      ).length
+    );
+  }
+
+  return counts;
+}
+
 export async function GET(request: Request) {
   const { response, supabase, profile, scope } =
     await requireAdminAreaContext(request, "assignment rules");
@@ -276,7 +388,8 @@ export async function GET(request: Request) {
     return jsonError("You do not have access to assignment rules.", 403);
   }
 
-  const result = await fetchRulesWithDetails(supabase, scope.companyId);
+  const moduleId = new URL(request.url).searchParams.get("module_id");
+  const result = await fetchRulesWithDetails(supabase, scope, moduleId);
 
   if (result.response) return result.response;
 
@@ -312,7 +425,12 @@ export async function POST(request: Request) {
     return jsonError("Fix the highlighted fields.", 400, fieldErrors);
   }
 
-  const references = await validateCompanyReferences(supabase, scope.companyId, values);
+  const references = await validateCompanyReferences(
+    supabase,
+    scope.companyId,
+    values,
+    true
+  );
   if (references.response) return references.response;
 
   const { data: rule, error } = await supabase

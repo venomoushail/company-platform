@@ -6,6 +6,9 @@ import SlideBuilder, { Slide } from "@/components/training/LessonBuilder";
 import { SlidePreviewCard } from "@/components/training/RenderedSlide";
 import QuizBuilder, { QuizQuestion } from "@/components/training/QuizBuilder";
 import QuizViewer from "@/components/training/QuizViewer";
+import TrainingAssignmentRulesPanel, {
+  type AssignmentRulesSummary,
+} from "@/components/training/TrainingAssignmentRulesPanel";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import type {
   Position,
@@ -39,6 +42,7 @@ type FormState = {
 };
 
 type SaveStatus = "idle" | "loading" | "success" | "error";
+type PublishAssignmentMode = "apply_current" | "future_only";
 
 function getReadableErrorMessage(data: unknown, fallback: string) {
   if (!data || typeof data !== "object") return fallback;
@@ -63,6 +67,7 @@ function normalizeStatus(status: "draft" | "published") {
 
 export default function NewTrainingPage() {
   const [moduleId, setModuleId] = useState<string | null>(null);
+  const [moduleStatus, setModuleStatus] = useState<string | null>(null);
   const [trainingTitle, setTrainingTitle] = useState("");
   const [formState, setFormState] = useState<FormState>({
     description: "",
@@ -79,6 +84,15 @@ export default function NewTrainingPage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [formMessage, setFormMessage] = useState("");
   const [audienceError, setAudienceError] = useState("");
+  const [assignmentSummary, setAssignmentSummary] =
+    useState<AssignmentRulesSummary>({
+      activeRuleCount: 0,
+      currentMatchCount: 0,
+      futureAssignmentEnabled: false,
+      daysAllowedLabels: [],
+    });
+  const [showPublishAssignmentConfirm, setShowPublishAssignmentConfirm] =
+    useState(false);
   const [positions, setPositions] = useState<Position[]>([]);
   const [selectedPositionIds, setSelectedPositionIds] = useState<string[]>([]);
   const [positionsStatus, setPositionsStatus] = useState<SaveStatus>("idle");
@@ -281,6 +295,7 @@ const selectedQuestion =
         if (!isMounted) return;
 
         setTrainingTitle(detail.module.title);
+        setModuleStatus(detail.module.status);
         setFormState({
           description: detail.module.description || "",
           category: detail.module.category || "",
@@ -372,10 +387,43 @@ const selectedQuestion =
     };
   }, [authHeaders]);
 
-  async function saveTraining(status: "draft" | "published") {
+  async function applyModuleAssignmentRules(savedModuleId: string) {
+    const headers = await authHeaders();
+    const response = await fetch("/api/training-assignment-rules/apply", {
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ module_id: savedModuleId }),
+    });
+    const data = (await response.json().catch(() => null)) as
+      | {
+          result?: {
+            createdAssignmentCount: number;
+            skippedDuplicateCount: number;
+          };
+        }
+      | { error?: string }
+      | null;
+
+    if (!response.ok) {
+      throw new Error(
+        getReadableErrorMessage(data, "Unable to apply assignment rules.")
+      );
+    }
+
+    return data && "result" in data ? data.result : null;
+  }
+
+  async function saveTraining(
+    status: "draft" | "published",
+    assignmentMode: PublishAssignmentMode = "future_only"
+  ) {
     setSaveStatus("loading");
     setFormMessage("");
     setAudienceError("");
+    setShowPublishAssignmentConfirm(false);
 
     if (
       formState.trainingAudience === "position_specific" &&
@@ -436,16 +484,71 @@ const selectedQuestion =
 
       const detail = data as TrainingDetailResponse;
       setModuleId(detail.module.id);
+      setModuleStatus(detail.module.status);
       window.history.replaceState(null, "", `/training/new?id=${detail.module.id}`);
+
+      let assignmentMessage = "";
+
+      if (
+        status === "published" &&
+        assignmentMode === "apply_current" &&
+        assignmentSummary.activeRuleCount > 0
+      ) {
+        const applyResult = await applyModuleAssignmentRules(detail.module.id);
+        assignmentMessage = applyResult
+          ? ` Created ${applyResult.createdAssignmentCount} assignments and skipped ${applyResult.skippedDuplicateCount} duplicates.`
+          : "";
+      }
+
       setSaveStatus("success");
       setFormMessage(
-        status === "published" ? "Training published." : "Training draft saved."
+        status === "published"
+          ? `Training published.${assignmentMessage}`
+          : "Training draft saved."
       );
     } catch (error) {
       setSaveStatus("error");
       setFormMessage(
         error instanceof Error ? error.message : "Unable to save training."
       );
+    }
+  }
+
+  function handlePublishClick() {
+    if (moduleId && assignmentSummary.activeRuleCount > 0) {
+      setShowPublishAssignmentConfirm(true);
+      return;
+    }
+
+    saveTraining("published");
+  }
+
+  async function handleApplyAssignmentsNow() {
+    if (!moduleId) {
+      throw new Error("Save this training before applying assignment rules.");
+    }
+
+    if (moduleStatus !== "published") {
+      throw new Error("Publish this training before applying assignment rules.");
+    }
+
+    setSaveStatus("loading");
+    setFormMessage("");
+
+    try {
+      const applyResult = await applyModuleAssignmentRules(moduleId);
+      setSaveStatus("success");
+      setFormMessage(
+        applyResult
+          ? `Created ${applyResult.createdAssignmentCount} assignments and skipped ${applyResult.skippedDuplicateCount} duplicates.`
+          : "Assignment rules applied."
+      );
+    } catch (error) {
+      setSaveStatus("error");
+      setFormMessage(
+        error instanceof Error ? error.message : "Unable to apply assignment rules."
+      );
+      throw error;
     }
   }
 
@@ -662,6 +765,14 @@ const selectedQuestion =
             </form>
           </div>
 
+          <TrainingAssignmentRulesPanel
+            moduleId={moduleId}
+            moduleStatus={moduleStatus}
+            selectedPositionIds={selectedPositionIds}
+            onSummaryChange={setAssignmentSummary}
+            onApplyNow={handleApplyAssignmentsNow}
+          />
+
           <SlideBuilder
   slides={slides}
   setSlides={setSlides}
@@ -782,7 +893,7 @@ const selectedQuestion =
             <button
               type="button"
               disabled={isBusy}
-              onClick={() => saveTraining("published")}
+              onClick={handlePublishClick}
               className="company-primary-button rounded-lg px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
             >
               Publish
@@ -856,6 +967,81 @@ const selectedQuestion =
           )}
         </div>
       </div>
+
+      {showPublishAssignmentConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-6 py-8">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="publish-assignment-title"
+            className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl"
+          >
+            <h2
+              id="publish-assignment-title"
+              className="text-lg font-bold text-slate-900"
+            >
+              This training has automatic assignment rules.
+            </h2>
+            <div className="mt-4 space-y-2 text-sm text-slate-600">
+              <p>
+                Current matching employees:{" "}
+                <span className="font-semibold text-slate-900">
+                  {assignmentSummary.currentMatchCount}
+                </span>
+              </p>
+              <p>
+                Future matching employees:{" "}
+                <span className="font-semibold text-slate-900">
+                  {assignmentSummary.futureAssignmentEnabled ? "Yes" : "No"}
+                </span>
+              </p>
+              <p>
+                Days allowed:{" "}
+                <span className="font-semibold text-slate-900">
+                  {assignmentSummary.daysAllowedLabels.join(", ") || "Module default"}
+                </span>
+              </p>
+              <p>
+                Applying now will create assignments for up to{" "}
+                {assignmentSummary.currentMatchCount} employees. Existing assignments
+                are skipped.
+              </p>
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => saveTraining("draft")}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Save as draft
+              </button>
+              <button
+                type="button"
+                onClick={() => saveTraining("published", "future_only")}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Publish for future only
+              </button>
+              <button
+                type="button"
+                onClick={() => saveTraining("published", "apply_current")}
+                className="company-primary-button rounded-lg px-4 py-2 text-sm font-semibold"
+              >
+                Publish and assign now
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowPublishAssignmentConfirm(false)}
+              className="mt-3 w-full rounded-lg px-4 py-2 text-sm font-semibold text-slate-500 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </AdminLayout>
   );
 }

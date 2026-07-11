@@ -1,15 +1,17 @@
 import { NextResponse } from "next/server";
 import { createHash } from "node:crypto";
-import { createRequire } from "node:module";
-import mammoth from "mammoth";
 import { getAdminContextForUserId } from "@/lib/auth/server";
 import { isAdminRole } from "@/lib/auth/roles";
 import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
 } from "@/lib/supabase/admin";
+import { extractDocument } from "@/lib/documents/pipeline/extractDocument";
+import type { ExtractionMethod } from "@/lib/documents/types";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const importBucket = "training-imports";
 const maxFileSizeBytes = 10 * 1024 * 1024;
@@ -19,20 +21,9 @@ const allowedMimeTypes = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "text/plain",
 ]);
-const pdfExtractionErrorMessage =
-  "PDF text extraction failed. This may be a scanned PDF or unsupported PDF format.";
-const require = createRequire(import.meta.url);
 
 type FieldErrors = Partial<Record<string, string>>;
 type ExtractionStatus = "extracting" | "text_ready" | "failed";
-type PdfParseModule = typeof import("pdf-parse");
-
-class PdfTextExtractionError extends Error {
-  constructor() {
-    super(pdfExtractionErrorMessage);
-    this.name = "PdfTextExtractionError";
-  }
-}
 
 function getBearerToken(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -158,68 +149,15 @@ function validateImportFile(file: File) {
 }
 
 function getReadableExtractionError(error: unknown) {
-  if (error instanceof PdfTextExtractionError) {
-    return pdfExtractionErrorMessage;
-  }
-
   if (error instanceof Error && error.message) {
     return error.message;
   }
 
-  return "Unable to extract text from the uploaded document.";
+  return "Unable to extract text from the uploaded document. You can paste the document text manually.";
 }
 
 function getSha256Hash(fileBuffer: ArrayBuffer) {
   return createHash("sha256").update(Buffer.from(fileBuffer)).digest("hex");
-}
-
-async function extractTextFromPdf(fileBuffer: ArrayBuffer) {
-  let parser: InstanceType<PdfParseModule["PDFParse"]> | null = null;
-
-  try {
-    const { PDFParse } = require("pdf-parse") as PdfParseModule;
-
-    parser = new PDFParse({
-      data: new Uint8Array(fileBuffer),
-      useWorkerFetch: false,
-      isEvalSupported: false,
-    });
-
-    const result = await parser.getText({ pageJoiner: "\n\n" });
-    const text = result.text.trim();
-
-    if (!text) {
-      // TODO: Scanned PDFs may need OCR later.
-      throw new PdfTextExtractionError();
-    }
-
-    return text;
-  } catch (error) {
-    logServerError("PDF text extraction failed", error);
-    throw new PdfTextExtractionError();
-  } finally {
-    await parser?.destroy();
-  }
-}
-
-async function extractTextFromFile(fileExtension: string, fileBuffer: ArrayBuffer) {
-  if (fileExtension === "docx") {
-    const result = await mammoth.extractRawText({
-      buffer: Buffer.from(fileBuffer),
-    });
-
-    return result.value.trim();
-  }
-
-  if (fileExtension === "txt") {
-    return new TextDecoder("utf-8").decode(fileBuffer).trim();
-  }
-
-  if (fileExtension === "pdf") {
-    return extractTextFromPdf(fileBuffer);
-  }
-
-  return "";
 }
 
 async function updateImportJob(
@@ -230,6 +168,9 @@ async function updateImportJob(
     status: ExtractionStatus;
     raw_text?: string | null;
     error_message?: string | null;
+    extraction_method?: ExtractionMethod | null;
+    extraction_confidence?: number | null;
+    page_count?: number | null;
     completed_at?: string | null;
   }
 ) {
@@ -337,6 +278,9 @@ export async function POST(request: Request) {
       generated_json: null,
       created_module_id: null,
       error_message: null,
+      extraction_method: null,
+      extraction_confidence: null,
+      page_count: null,
       completed_at: null,
     })
     .select("*")
@@ -364,12 +308,45 @@ export async function POST(request: Request) {
   }
 
   try {
-    const rawText = await extractTextFromFile(fileExtension, fileBuffer);
+    const extractionResult = await extractDocument({
+      fileBuffer,
+      filename: fileValue.name,
+      mimeType: fileValue.type || "application/octet-stream",
+    });
+
+    if (!extractionResult.success) {
+      const failedResult = await updateImportJob(
+        supabase,
+        job.id,
+        profile.company_id,
+        {
+          status: "failed",
+          raw_text: extractionResult.text || null,
+          error_message:
+            extractionResult.error ||
+            "Unable to extract text from the uploaded document. You can paste the document text manually.",
+          extraction_method: extractionResult.method,
+          extraction_confidence: extractionResult.confidence,
+          page_count: extractionResult.pageCount,
+          completed_at: new Date().toISOString(),
+        }
+      );
+
+      if (failedResult.error || !failedResult.data) {
+        logServerError("Training import failed status update failed", failedResult.error);
+        return jsonError("Document text extraction failed.", 500);
+      }
+
+      return NextResponse.json({ job: failedResult.data }, { status: 201 });
+    }
 
     const readyResult = await updateImportJob(supabase, job.id, profile.company_id, {
       status: "text_ready",
-      raw_text: rawText,
+      raw_text: extractionResult.text,
       error_message: null,
+      extraction_method: extractionResult.method,
+      extraction_confidence: extractionResult.confidence,
+      page_count: extractionResult.pageCount,
       completed_at: new Date().toISOString(),
     });
 

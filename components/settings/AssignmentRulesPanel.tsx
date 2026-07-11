@@ -27,6 +27,7 @@ type AssignmentRuleWithDetails = TrainingAssignmentRule & {
   module: Pick<TrainingModule, "id" | "title" | "status"> | null;
   position: Pick<Position, "id" | "name"> | null;
   location: Pick<Location, "id" | "name" | "store_number"> | null;
+  current_match_count: number;
 };
 
 type RulesResponse = {
@@ -594,6 +595,7 @@ export default function AssignmentRulesPanel() {
               <th className="px-5 py-3">Location</th>
               <th className="px-5 py-3">Days</th>
               <th className="px-5 py-3">Status</th>
+              <th className="px-5 py-3">Matches</th>
               <th className="px-5 py-3">Triggers</th>
               <th className="px-5 py-3 text-right">Actions</th>
             </tr>
@@ -602,7 +604,17 @@ export default function AssignmentRulesPanel() {
             {rules.map((rule) => (
               <tr key={rule.id} className="hover:bg-slate-50">
                 <td className="px-5 py-4 font-semibold text-slate-900">
-                  {rule.module?.title ?? "Unknown training"}
+                  <div className="space-y-1">
+                    <p>{rule.module?.title ?? "Unknown training"}</p>
+                    {rule.module && (
+                      <a
+                        href={`/training/new?id=${encodeURIComponent(rule.module.id)}#assignments`}
+                        className="text-xs font-semibold company-accent-link hover:underline"
+                      >
+                        Edit in Training Builder
+                      </a>
+                    )}
+                  </div>
                 </td>
                 <td className="px-5 py-4 text-slate-700">
                   {ruleTypeLabels[rule.rule_type]}
@@ -626,6 +638,9 @@ export default function AssignmentRulesPanel() {
                   >
                     {rule.is_active ? "Active" : "Inactive"}
                   </span>
+                </td>
+                <td className="px-5 py-4 text-slate-700">
+                  {rule.current_match_count} employees
                 </td>
                 <td className="px-5 py-4 text-slate-700">
                   {getRuleTriggers(rule)}
@@ -660,7 +675,7 @@ export default function AssignmentRulesPanel() {
             {rules.length === 0 && (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="px-5 py-10 text-center text-sm font-medium text-slate-500"
                 >
                   {isFetching

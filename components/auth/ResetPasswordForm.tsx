@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import PasswordResetRequestForm from "@/components/auth/PasswordResetRequestForm";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 
 type RecoveryState = "checking" | "ready" | "missing" | "success";
@@ -32,8 +33,10 @@ function getReadableError(error: unknown, fallback: string) {
 }
 
 export default function ResetPasswordForm() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const hasHandledRecoveryLink = useRef(false);
+  const redirectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [recoveryState, setRecoveryState] = useState<RecoveryState>("checking");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -70,7 +73,7 @@ export default function ResetPasswordForm() {
           setError(
             getReadableError(
               exchangeError,
-              "This password setup link is invalid or expired."
+              "This password reset link is invalid or expired."
             )
           );
           setRecoveryState("missing");
@@ -104,7 +107,7 @@ export default function ResetPasswordForm() {
           setError(
             getReadableError(
               sessionError,
-              "This password setup link is invalid or expired."
+              "This password reset link is invalid or expired."
             )
           );
           setRecoveryState("missing");
@@ -123,6 +126,14 @@ export default function ResetPasswordForm() {
 
     establishRecoverySession();
   }, [searchParams, supabase]);
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimeoutRef.current) {
+        clearTimeout(redirectTimeoutRef.current);
+      }
+    };
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -167,15 +178,18 @@ export default function ResetPasswordForm() {
     await supabase.auth.signOut();
     setNewPassword("");
     setConfirmPassword("");
-    setSuccessMessage("Your password has been set. You can now sign in.");
+    setSuccessMessage("Your password has been reset. Redirecting to sign in...");
     setRecoveryState("success");
     setIsSubmitting(false);
+    redirectTimeoutRef.current = setTimeout(() => {
+      router.replace("/login");
+    }, 1800);
   }
 
   if (!supabase) {
     return (
       <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
-        Add Supabase env values before setting a password.
+        Add Supabase env values before resetting a password.
       </div>
     );
   }
@@ -183,7 +197,7 @@ export default function ResetPasswordForm() {
   if (recoveryState === "checking") {
     return (
       <p className="text-sm font-medium text-slate-600">
-        Checking password setup link...
+        Checking password reset link...
       </p>
     );
   }
@@ -203,14 +217,24 @@ export default function ResetPasswordForm() {
       )}
 
       {recoveryState === "missing" ? (
-        <p className="text-sm leading-6 text-slate-600">
-          Open the latest password setup email to continue. Password setup links
-          can expire or be used only once.
-        </p>
+        <div className="space-y-5">
+          <p className="text-sm leading-6 text-slate-600">
+            Open the latest password reset email to continue. Reset links can
+            expire or be used only once.
+          </p>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <h2 className="text-sm font-semibold text-slate-900">
+              Request a new link
+            </h2>
+            <div className="mt-4">
+              <PasswordResetRequestForm />
+            </div>
+          </div>
+        </div>
       ) : recoveryState === "success" ? (
         <Link
           href="/login"
-          className="block w-full rounded-lg bg-blue-600 px-4 py-3 text-center text-sm font-semibold text-white hover:bg-blue-700"
+          className="company-primary-button block w-full rounded-lg px-4 py-3 text-center text-sm font-semibold"
         >
           Go to sign in
         </Link>
@@ -229,8 +253,9 @@ export default function ResetPasswordForm() {
               value={newPassword}
               onChange={(event) => setNewPassword(event.target.value)}
               autoComplete="new-password"
+              minLength={8}
               required
-              className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+              className="company-focus w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900"
             />
           </div>
 
@@ -247,17 +272,18 @@ export default function ResetPasswordForm() {
               value={confirmPassword}
               onChange={(event) => setConfirmPassword(event.target.value)}
               autoComplete="new-password"
+              minLength={8}
               required
-              className="w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+              className="company-focus w-full rounded-lg border border-slate-300 px-4 py-3 text-sm text-slate-900"
             />
           </div>
 
           <button
             type="submit"
             disabled={isSubmitting}
-            className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            className="company-primary-button w-full rounded-lg px-4 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            {isSubmitting ? "Saving password..." : "Set Password"}
+            {isSubmitting ? "Saving password..." : "Set password"}
           </button>
         </form>
       )}

@@ -86,6 +86,15 @@ export type TrainingImportJob = {
   generated_json: unknown | null;
   created_module_id: string | null;
   error_message: string | null;
+  extraction_method:
+    | "docx"
+    | "txt"
+    | "pdf_embedded_text"
+    | "pdf_ocr"
+    | "manual_paste"
+    | null;
+  extraction_confidence: number | null;
+  page_count: number | null;
   created_at: string;
   completed_at: string | null;
 };

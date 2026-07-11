@@ -12,6 +12,7 @@ import {
 } from "@/lib/training/importDraft";
 import { getGeneratedCurriculumRecord } from "@/lib/training/curriculumBuilder";
 import type { TrainingImportJob } from "@/types/supabase";
+import type { TrainingModule } from "@/types/supabase";
 import type { GeneratedTrainingDraft } from "@/lib/training/importDraft";
 import {
   availablePromptVersions,
@@ -30,6 +31,12 @@ type ImportJobResponse = {
 type ImportJobsResponse = {
   jobs: TrainingImportJob[];
 };
+
+type TrainingModulesResponse = {
+  modules: TrainingModule[];
+};
+
+type GeneratedModuleSummary = Pick<TrainingModule, "id" | "title" | "status">;
 
 type SaveDraftResponse = {
   job: TrainingImportJob;
@@ -58,6 +65,15 @@ const selectedTrainingGenerationSteps = [
   "Generating selected trainings...",
   "Writing draft modules...",
   "Saving slides and quizzes...",
+];
+const extractionStageLabels = [
+  "Uploading document...",
+  "Reading PDF...",
+  "Checking PDF text quality...",
+  "Preparing OCR sections...",
+  "Running OCR on a large document...",
+  "Combining extracted text...",
+  "Text ready",
 ];
 const generationStyleOptions: { value: GenerationStyle; label: string }[] = [
   { value: "standard", label: "Standard" },
@@ -160,6 +176,36 @@ function getTextPreview(rawText: string | null) {
   return `${normalizedText.slice(0, 700)}...`;
 }
 
+function getExtractionMethodLabel(job: TrainingImportJob) {
+  switch (job.extraction_method) {
+    case "docx":
+      return "Text extracted from Word document";
+    case "txt":
+      return "Text extracted from text file";
+    case "pdf_embedded_text":
+      return "Text extracted from PDF";
+    case "pdf_ocr":
+      return "OCR used for scanned or unreadable PDF";
+    case "manual_paste":
+      return "Text pasted manually";
+    default:
+      return "Extraction method not recorded";
+  }
+}
+
+function formatConfidence(confidence: number | null) {
+  if (typeof confidence !== "number") return null;
+
+  return `${Math.round(confidence * 100)}%`;
+}
+
+function hasLowExtractionConfidence(job: TrainingImportJob) {
+  return (
+    typeof job.extraction_confidence === "number" &&
+    job.extraction_confidence < 0.75
+  );
+}
+
 function toHexString(buffer: ArrayBuffer) {
   return Array.from(new Uint8Array(buffer))
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -238,6 +284,49 @@ async function fetchImportJobs(token: string) {
   return (responseData as ImportJobsResponse).jobs;
 }
 
+async function fetchTrainingModules(token: string) {
+  const response = await fetch("/api/training", {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const responseData = (await response.json().catch(() => null)) as
+    | TrainingModulesResponse
+    | { error?: string }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(
+      getReadableErrorMessage(responseData, "Unable to load generated trainings.")
+    );
+  }
+
+  return (responseData as TrainingModulesResponse).modules;
+}
+
+async function saveManualPastedText(jobId: string, rawText: string, token: string) {
+  const response = await fetch(`/api/training/imports/${encodeURIComponent(jobId)}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ rawText }),
+  });
+  const responseData = (await response.json().catch(() => null)) as
+    | ImportJobResponse
+    | { error?: string }
+    | null;
+
+  if (!response.ok) {
+    throw new Error(
+      getReadableErrorMessage(responseData, "Unable to save pasted document text.")
+    );
+  }
+
+  return (responseData as ImportJobResponse).job;
+}
+
 function getLikelyDuplicateImport(
   file: File | null,
   fileHash: string,
@@ -262,6 +351,69 @@ function getLikelyDuplicateImport(
   );
 }
 
+function getCreatedModuleIds(job: TrainingImportJob) {
+  const curriculumRecord = getGeneratedCurriculumRecord(job.generated_json);
+  const moduleIds = [
+    ...(curriculumRecord?.created_module_ids ?? []),
+    ...(job.created_module_id ? [job.created_module_id] : []),
+  ];
+
+  return Array.from(new Set(moduleIds));
+}
+
+function getStatusBadgeClassForModule(status: string) {
+  if (status === "published") return "bg-green-100 text-green-700";
+  if (status === "archived") return "bg-slate-200 text-slate-600";
+
+  return "bg-yellow-100 text-yellow-700";
+}
+
+function GeneratedModuleLinks({
+  moduleIds,
+  moduleMap,
+}: {
+  moduleIds: string[];
+  moduleMap: Map<string, GeneratedModuleSummary>;
+}) {
+  if (moduleIds.length === 0) return null;
+
+  // TODO: Extend this with module completion counts, last edited date, assigned employee count, and publish status detail.
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Generated Modules
+      </p>
+      <div className="space-y-1.5">
+        {moduleIds.map((moduleId) => {
+          const generatedModule = moduleMap.get(moduleId);
+          const title = generatedModule?.title?.trim() || "Unknown Training";
+          const status = generatedModule?.status?.trim() || "";
+
+          return (
+            <a
+              key={moduleId}
+              href={`/training/new?id=${encodeURIComponent(moduleId)}`}
+              title={title}
+              className="flex max-w-72 items-center justify-between gap-2 rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              <span className="min-w-0 truncate">📘 {title}</span>
+              {status && (
+                <span
+                  className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${getStatusBadgeClassForModule(
+                    status
+                  )}`}
+                >
+                  {formatStatus(status)}
+                </span>
+              )}
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function ImportTrainingPage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -273,6 +425,9 @@ export default function ImportTrainingPage() {
   const [message, setMessage] = useState("");
   const [importJob, setImportJob] = useState<TrainingImportJob | null>(null);
   const [existingImports, setExistingImports] = useState<TrainingImportJob[]>([]);
+  const [generatedModuleMap, setGeneratedModuleMap] = useState<
+    Map<string, GeneratedModuleSummary>
+  >(new Map());
   const [importsStatus, setImportsStatus] = useState<UploadState>("idle");
   const [importsMessage, setImportsMessage] = useState("");
   const [importSearch, setImportSearch] = useState("");
@@ -296,6 +451,9 @@ export default function ImportTrainingPage() {
     useState<PromptVersion>(defaultPromptVersion);
   const [saveStatus, setSaveStatus] = useState<UploadState>("idle");
   const [saveMessage, setSaveMessage] = useState("");
+  const [manualPasteText, setManualPasteText] = useState("");
+  const [manualPasteStatus, setManualPasteStatus] = useState<UploadState>("idle");
+  const [manualPasteMessage, setManualPasteMessage] = useState("");
 
   const selectedFileSummary = useMemo(() => {
     if (!selectedFile) return "DOCX, PDF, or TXT up to 10MB";
@@ -332,10 +490,25 @@ export default function ImportTrainingPage() {
           setImportsStatus("uploading");
           setImportsMessage("");
         }
-        const jobs = await fetchImportJobs(data.session.access_token);
+        const [jobs, modules] = await Promise.all([
+          fetchImportJobs(data.session.access_token),
+          fetchTrainingModules(data.session.access_token),
+        ]);
 
         if (isMounted) {
           setExistingImports(jobs);
+          setGeneratedModuleMap(
+            new Map(
+              modules.map((module) => [
+                module.id,
+                {
+                  id: module.id,
+                  title: module.title,
+                  status: module.status,
+                },
+              ])
+            )
+          );
           setImportsStatus("success");
         }
       } catch (error) {
@@ -367,6 +540,7 @@ export default function ImportTrainingPage() {
     setAllowDuplicateUpload(false);
     setGenerationMessage("");
     setSaveMessage("");
+    setManualPasteMessage("");
     setUploadState("idle");
     setGenerationStatus("idle");
     setSaveStatus("idle");
@@ -460,6 +634,9 @@ export default function ImportTrainingPage() {
       setGenerationMessage("");
       setSaveStatus("idle");
       setSaveMessage("");
+      setManualPasteText("");
+      setManualPasteMessage("");
+      setManualPasteStatus("idle");
       setUploadProgress(100);
       setMessage(
         response.job.status === "text_ready"
@@ -508,9 +685,24 @@ export default function ImportTrainingPage() {
 
     try {
       const token = await getAccessToken();
-      const jobs = await fetchImportJobs(token);
+      const [jobs, modules] = await Promise.all([
+        fetchImportJobs(token),
+        fetchTrainingModules(token),
+      ]);
 
       setExistingImports(jobs);
+      setGeneratedModuleMap(
+        new Map(
+          modules.map((module) => [
+            module.id,
+            {
+              id: module.id,
+              title: module.title,
+              status: module.status,
+            },
+          ])
+        )
+      );
       setImportsStatus("success");
     } catch (error) {
       setImportsStatus("error");
@@ -530,6 +722,18 @@ export default function ImportTrainingPage() {
     });
   }
 
+  function updateGeneratedModuleSummaries(modules: GeneratedModuleSummary[]) {
+    setGeneratedModuleMap((currentMap) => {
+      const nextMap = new Map(currentMap);
+
+      for (const generatedModule of modules) {
+        nextMap.set(generatedModule.id, generatedModule);
+      }
+
+      return nextMap;
+    });
+  }
+
   function selectImportJob(job: TrainingImportJob) {
     const curriculumRecord = getGeneratedCurriculumRecord(job.generated_json);
 
@@ -538,6 +742,9 @@ export default function ImportTrainingPage() {
     setSaveMessage("");
     setGenerationStatus("idle");
     setSaveStatus("idle");
+    setManualPasteStatus("idle");
+    setManualPasteMessage("");
+    setManualPasteText("");
     setCreatedCurriculumModules([]);
 
     if (curriculumRecord) {
@@ -742,6 +949,13 @@ export default function ImportTrainingPage() {
       setImportJob(selectedResponse.job);
       updateExistingImportJob(selectedResponse.job);
       setCreatedCurriculumModules(selectedResponse.modules);
+      updateGeneratedModuleSummaries(
+        selectedResponse.modules.map((module) => ({
+          id: module.id,
+          title: module.title,
+          status: "draft",
+        }))
+      );
       setSaveStatus("success");
       setSaveMessage(
         `${selectedResponse.modules.length} draft training module${
@@ -792,6 +1006,15 @@ export default function ImportTrainingPage() {
       const saveResponse = responseData as SaveDraftResponse;
       setImportJob(saveResponse.job);
       updateExistingImportJob(saveResponse.job);
+      if (generatedDraft?.module.title) {
+        updateGeneratedModuleSummaries([
+          {
+            id: saveResponse.moduleId,
+            title: generatedDraft.module.title,
+            status: "draft",
+          },
+        ]);
+      }
       setSaveStatus("success");
       router.push(`/training/new?id=${encodeURIComponent(saveResponse.moduleId)}`);
     } catch (error) {
@@ -853,11 +1076,48 @@ export default function ImportTrainingPage() {
     }
   }
 
+  async function handleManualPasteSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!importJob) return;
+
+    setManualPasteStatus("uploading");
+    setManualPasteMessage("");
+
+    try {
+      const token = await getAccessToken();
+      const updatedJob = await saveManualPastedText(
+        importJob.id,
+        manualPasteText,
+        token
+      );
+
+      setImportJob(updatedJob);
+      updateExistingImportJob(updatedJob);
+      setManualPasteText("");
+      setManualPasteStatus("success");
+      setManualPasteMessage("Pasted text saved. You can generate training now.");
+      setUploadState("success");
+      setMessage("");
+    } catch (error) {
+      setManualPasteStatus("error");
+      setManualPasteMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to save pasted document text."
+      );
+    }
+  }
+
   const isUploading = uploadState === "uploading";
   const isGenerating = generationStatus === "uploading";
   const isSaving = saveStatus === "uploading";
+  const isManualPasteSaving = manualPasteStatus === "uploading";
   const extractedTextPreview = getTextPreview(importJob?.raw_text ?? null);
   const characterCount = importJob?.raw_text?.length ?? 0;
+  const extractionConfidence = importJob
+    ? formatConfidence(importJob.extraction_confidence)
+    : null;
   const generatedDraft = useMemo<GeneratedTrainingDraft | null>(
     () => normalizeGeneratedTrainingDraft(importJob?.generated_json ?? null),
     [importJob?.generated_json]
@@ -960,9 +1220,13 @@ export default function ImportTrainingPage() {
             )}
 
             {isUploading && (
-              <div>
+              <div className="space-y-3">
                 <div className="mb-2 flex items-center justify-between text-xs font-semibold text-slate-600">
-                  <span>Uploading</span>
+                  <span>
+                    {uploadProgress < 100
+                      ? "Uploading document..."
+                      : "Preparing extracted text..."}
+                  </span>
                   <span>{uploadProgress}%</span>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-slate-200">
@@ -970,6 +1234,16 @@ export default function ImportTrainingPage() {
                     className="h-full rounded-full bg-[var(--company-secondary)] transition-all"
                     style={{ width: `${uploadProgress}%` }}
                   />
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {extractionStageLabels.map((stage) => (
+                    <div
+                      key={stage}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600"
+                    >
+                      {stage}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
@@ -1078,6 +1352,31 @@ export default function ImportTrainingPage() {
               </div>
               <div>
                 <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Extraction
+                </dt>
+                <dd className="mt-1 space-y-2 text-sm font-semibold text-slate-900">
+                  <p>{getExtractionMethodLabel(importJob)}</p>
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    {typeof importJob.page_count === "number" && (
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600">
+                        {importJob.page_count.toLocaleString()} pages
+                      </span>
+                    )}
+                    {extractionConfidence && (
+                      <span className="rounded-full bg-slate-100 px-2.5 py-1 font-semibold text-slate-600">
+                        {extractionConfidence} confidence
+                      </span>
+                    )}
+                    {hasLowExtractionConfidence(importJob) && (
+                      <span className="rounded-full bg-yellow-100 px-2.5 py-1 font-semibold text-yellow-800">
+                        Low confidence
+                      </span>
+                    )}
+                  </div>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Extracted text preview
                 </dt>
                 <dd className="mt-2">
@@ -1094,6 +1393,42 @@ export default function ImportTrainingPage() {
                   )}
                 </dd>
               </div>
+              {importJob.status === "failed" && (
+                <div>
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Paste Text Instead
+                  </dt>
+                  <dd className="mt-2">
+                    <form onSubmit={handleManualPasteSubmit} className="space-y-3">
+                      <textarea
+                        value={manualPasteText}
+                        onChange={(event) => setManualPasteText(event.target.value)}
+                        rows={6}
+                        placeholder="Paste the source document text here."
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
+                      />
+                      <button
+                        type="submit"
+                        disabled={isManualPasteSaving}
+                        className="company-primary-button rounded-lg px-4 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isManualPasteSaving ? "Saving..." : "Save Pasted Text"}
+                      </button>
+                      {manualPasteMessage && (
+                        <p
+                          className={`text-sm font-medium ${
+                            manualPasteStatus === "error"
+                              ? "text-red-700"
+                              : "text-green-700"
+                          }`}
+                        >
+                          {manualPasteMessage}
+                        </p>
+                      )}
+                    </form>
+                  </dd>
+                </div>
+              )}
               <div>
                 <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Uploaded
@@ -1203,6 +1538,7 @@ export default function ImportTrainingPage() {
                       job.status === "modules_created";
                     const canRegenerate = Boolean(job.generated_json && job.raw_text);
                     const characterCount = job.raw_text?.length ?? 0;
+                    const createdModuleIds = getCreatedModuleIds(job);
 
                     return (
                       <tr key={job.id} className="align-top">
@@ -1224,9 +1560,31 @@ export default function ImportTrainingPage() {
                           </span>
                         </td>
                         <td className="px-4 py-4 text-slate-600">
-                          {characterCount > 0
-                            ? `${characterCount.toLocaleString()} chars`
-                            : "No text"}
+                          <div className="space-y-1">
+                            <p>
+                              {characterCount > 0
+                                ? `${characterCount.toLocaleString()} chars`
+                                : "No text"}
+                            </p>
+                            <p className="text-xs">{getExtractionMethodLabel(job)}</p>
+                            <div className="flex flex-wrap gap-1">
+                              {typeof job.page_count === "number" && (
+                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                                  {job.page_count.toLocaleString()} pages
+                                </span>
+                              )}
+                              {formatConfidence(job.extraction_confidence) && (
+                                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                                  {formatConfidence(job.extraction_confidence)} confidence
+                                </span>
+                              )}
+                              {hasLowExtractionConfidence(job) && (
+                                <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-semibold text-yellow-800">
+                                  Low confidence
+                                </span>
+                              )}
+                            </div>
+                          </div>
                         </td>
                         <td className="px-4 py-4 text-slate-600">
                           {curriculumMetadata ? (
@@ -1254,39 +1612,11 @@ export default function ImportTrainingPage() {
                           )}
                         </td>
                         <td className="px-4 py-4">
-                          {curriculumMetadata?.created_module_ids?.length ? (
-                            <div className="space-y-2">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                Created Modules
-                              </p>
-                              <div className="flex flex-wrap gap-2">
-                                {curriculumMetadata.created_module_ids.map(
-                                  (moduleId, index) => (
-                                    <a
-                                      key={moduleId}
-                                      href={`/training/new?id=${encodeURIComponent(moduleId)}`}
-                                      className="inline-flex rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                                    >
-                                      Open {index + 1}
-                                    </a>
-                                  )
-                                )}
-                              </div>
-                            </div>
-                          ) : job.created_module_id ? (
-                            <div className="space-y-2">
-                              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                Generated Training
-                              </p>
-                              <a
-                                href={`/training/new?id=${encodeURIComponent(
-                                  job.created_module_id
-                                )}`}
-                                className="inline-flex rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                              >
-                                Open Training
-                              </a>
-                            </div>
+                          {createdModuleIds.length > 0 ? (
+                            <GeneratedModuleLinks
+                              moduleIds={createdModuleIds}
+                              moduleMap={generatedModuleMap}
+                            />
                           ) : (
                             <span className="text-xs text-slate-400">Not created</span>
                           )}

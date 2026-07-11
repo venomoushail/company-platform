@@ -7,6 +7,7 @@ import {
 } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
 type FieldErrors = Partial<Record<string, string>>;
 
@@ -151,4 +152,58 @@ export async function DELETE(
   }
 
   return NextResponse.json({ success: true });
+}
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ jobId: string }> }
+) {
+  const { jobId } = await context.params;
+  const { response, supabase, profile } = await requireAdminContext(request);
+
+  if (response) return response;
+
+  if (!profile.is_active || !isAdminRole(profile.role)) {
+    return jsonError("Only active admins or managers can update imports.", 403);
+  }
+
+  let body: { rawText?: unknown };
+
+  try {
+    body = (await request.json()) as { rawText?: unknown };
+  } catch (error) {
+    logServerError("Training import manual text parsing failed", error);
+    return jsonError("Unable to read pasted text.", 400);
+  }
+
+  const rawText = typeof body.rawText === "string" ? body.rawText.trim() : "";
+
+  if (rawText.length < 20) {
+    return jsonError("Paste at least 20 characters of document text.", 400, {
+      rawText: "Paste at least 20 characters of document text.",
+    });
+  }
+
+  const { data: job, error } = await supabase
+    .from("training_import_jobs")
+    .update({
+      raw_text: rawText,
+      status: "text_ready",
+      error_message: null,
+      extraction_method: "manual_paste",
+      extraction_confidence: 1,
+      page_count: null,
+      completed_at: new Date().toISOString(),
+    })
+    .eq("id", jobId)
+    .eq("company_id", profile.company_id)
+    .select("*")
+    .single();
+
+  if (error || !job) {
+    logServerError("Training import manual text update failed", error);
+    return jsonError("Unable to save pasted document text.", 500);
+  }
+
+  return NextResponse.json({ job });
 }

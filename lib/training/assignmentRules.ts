@@ -18,6 +18,7 @@ type SupabaseAdminClient = ReturnType<typeof createAdminSupabaseClient>;
 type ApplyAssignmentRulesOptions = {
   supabase?: SupabaseAdminClient;
   assignedBy?: string | null;
+  moduleId?: string | null;
 };
 
 type EmployeeRuleContext = {
@@ -106,13 +107,18 @@ async function fetchEmployeeRuleContext(
 async function fetchActiveRules(
   supabase: SupabaseAdminClient,
   companyId: string,
-  triggerType: AssignmentRuleTriggerType
+  triggerType: AssignmentRuleTriggerType,
+  moduleId?: string | null
 ) {
   let query = supabase
     .from("training_assignment_rules")
     .select("*")
     .eq("company_id", companyId)
     .eq("is_active", true);
+
+  if (moduleId) {
+    query = query.eq("module_id", moduleId);
+  }
 
   const triggerColumn = getTriggerColumn(triggerType);
 
@@ -136,8 +142,9 @@ async function fetchModuleDaysAllowed(
 
   const { data, error } = await supabase
     .from("training_modules")
-    .select("id,days_allowed")
+    .select("id,days_allowed,status")
     .eq("company_id", companyId)
+    .eq("status", "published")
     .in("id", moduleIds);
 
   if (error) throw error;
@@ -165,7 +172,8 @@ export async function applyAssignmentRulesForEmployee(
   const rules = await fetchActiveRules(
     supabase,
     context.employee.company_id,
-    triggerType
+    triggerType,
+    options.moduleId
   );
   const matchingRules = rules.filter((rule) => ruleMatchesEmployee(rule, context));
   const moduleIds = Array.from(new Set(matchingRules.map((rule) => rule.module_id)));
@@ -197,6 +205,10 @@ export async function applyAssignmentRulesForEmployee(
   const now = new Date();
   const insertRows = matchingRules.flatMap((rule) => {
     if (existingModuleIds.has(rule.module_id) || createdModuleIds.has(rule.module_id)) {
+      return [];
+    }
+
+    if (!modulesById.has(rule.module_id)) {
       return [];
     }
 
