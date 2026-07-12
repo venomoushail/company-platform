@@ -15,6 +15,7 @@ import {
 } from "@/lib/supabase/admin";
 import {
   generatedTrainingDraftSchema,
+  generatedTrainingDraftV4Schema,
   normalizeGeneratedTrainingDraft,
 } from "@/lib/training/importDraft";
 
@@ -29,6 +30,26 @@ type GenerationOptions = {
   generationStyle: GenerationStyle;
   promptVersion: PromptVersion;
 };
+type OpenAiErrorDetails = {
+  status: number;
+  statusText: string;
+  requestId: string | null;
+  responseJson: unknown | null;
+  responseText: string | null;
+  errorType: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+};
+
+class OpenAiGenerationError extends Error {
+  constructor(
+    message: string,
+    readonly developmentMessage: string
+  ) {
+    super(message);
+    this.name = "OpenAiGenerationError";
+  }
+}
 
 function getBearerToken(request: Request) {
   const authHeader = request.headers.get("authorization");
@@ -44,6 +65,94 @@ function jsonError(message: string, status: number, fieldErrors: FieldErrors = {
 
 function logServerError(message: string, error: unknown) {
   console.error(`[training-imports] ${message}`, error);
+}
+
+function readOpenAiErrorField(errorObject: unknown, field: string) {
+  if (!errorObject || typeof errorObject !== "object") return null;
+
+  const value = (errorObject as Record<string, unknown>)[field];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+async function readOpenAiResponse(response: Response) {
+  const responseText = await response.text().catch(() => "");
+
+  if (!responseText.trim()) {
+    return {
+      responseJson: null,
+      responseText: null,
+    };
+  }
+
+  try {
+    return {
+      responseJson: JSON.parse(responseText) as unknown,
+      responseText: null,
+    };
+  } catch {
+    return {
+      responseJson: null,
+      responseText,
+    };
+  }
+}
+
+function getOpenAiErrorDetails(
+  response: Response,
+  responseJson: unknown,
+  responseText: string | null
+): OpenAiErrorDetails {
+  const errorObject =
+    responseJson && typeof responseJson === "object"
+      ? (responseJson as { error?: unknown }).error
+      : null;
+
+  return {
+    status: response.status,
+    statusText: response.statusText,
+    requestId: response.headers.get("x-request-id"),
+    responseJson,
+    responseText,
+    errorType: readOpenAiErrorField(errorObject, "type"),
+    errorCode: readOpenAiErrorField(errorObject, "code"),
+    errorMessage: readOpenAiErrorField(errorObject, "message"),
+  };
+}
+
+function formatOpenAiDevelopmentError(details: OpenAiErrorDetails) {
+  const lines = [
+    "OpenAI Error",
+    `Status: ${details.status}${details.statusText ? ` ${details.statusText}` : ""}`,
+  ];
+
+  if (details.errorType) {
+    lines.push("", "Type:", details.errorType);
+  }
+
+  if (details.errorCode) {
+    lines.push("", "Code:", details.errorCode);
+  }
+
+  if (details.errorMessage) {
+    lines.push("", "Message:", details.errorMessage);
+  }
+
+  if (details.requestId) {
+    lines.push("", "Request ID:", details.requestId);
+  }
+
+  if (!details.errorMessage && details.responseText) {
+    lines.push("", "Response:", details.responseText);
+  }
+
+  return lines.join("\n");
+}
+
+function createOpenAiGenerationError(details: OpenAiErrorDetails) {
+  return new OpenAiGenerationError(
+    "OpenAI was unable to generate the training draft.",
+    formatOpenAiDevelopmentError(details)
+  );
 }
 
 function validateSupabaseAdminEnv() {
@@ -200,6 +309,8 @@ export async function POST(
   const { generationStyle, promptVersion } = await readGenerationOptions(request);
   const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
   const promptBuilder = getRestaurantTrainingPromptBuilder(promptVersion);
+  const draftSchema =
+    promptVersion === "v4" ? generatedTrainingDraftV4Schema : generatedTrainingDraftSchema;
 
   if (response) return response;
 
@@ -264,22 +375,28 @@ export async function POST(
           format: {
             type: "json_schema",
             name: "training_draft",
-            schema: generatedTrainingDraftSchema,
+            schema: draftSchema,
             strict: true,
           },
         },
       }),
     });
 
-    const responseJson = (await openAiResponse.json().catch(() => null)) as unknown;
+    const { responseJson, responseText: rawResponseText } =
+      await readOpenAiResponse(openAiResponse);
 
     if (!openAiResponse.ok) {
-      logServerError("OpenAI training generation failed", responseJson);
-      throw new Error("OpenAI was unable to generate the training draft.");
+      const details = getOpenAiErrorDetails(
+        openAiResponse,
+        responseJson,
+        rawResponseText
+      );
+      logServerError("OpenAI training generation failed", details);
+      throw createOpenAiGenerationError(details);
     }
 
-    const responseText = extractResponseText(responseJson);
-    const parsedJson = parseGeneratedDraftJson(responseText);
+    const generatedDraftText = extractResponseText(responseJson);
+    const parsedJson = parseGeneratedDraftJson(generatedDraftText);
     const draft = normalizeGeneratedTrainingDraft(parsedJson);
 
     if (!draft) {
@@ -314,7 +431,11 @@ export async function POST(
     logServerError("AI training generation failed", error);
 
     const errorMessage =
-      error instanceof Error && error.message
+      error instanceof OpenAiGenerationError
+        ? process.env.NODE_ENV === "development"
+          ? error.developmentMessage
+          : error.message
+        : error instanceof Error && error.message
         ? error.message
         : "Unable to generate the training draft.";
 

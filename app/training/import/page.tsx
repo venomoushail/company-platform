@@ -139,7 +139,157 @@ function formatStatus(status: string) {
 }
 
 function formatSlideType(slideType: string) {
+  if (slideType === "image_hotspot") return "Image Hotspot";
+  if (slideType === "knowledge_check") return "Knowledge Check";
   return formatStatus(slideType);
+}
+
+function getDraftConfig(slide: GeneratedTrainingDraft["slides"][number]) {
+  return slide.config && typeof slide.config === "object" ? slide.config : {};
+}
+
+function readConfigString(config: Record<string, unknown>, key: string) {
+  const value = config[key];
+  return typeof value === "string" ? value : "";
+}
+
+function readConfigAnswers(config: Record<string, unknown>) {
+  const answers = config.answers;
+  if (!Array.isArray(answers)) return [];
+
+  return answers
+    .map((answer) => {
+      if (!answer || typeof answer !== "object") return null;
+      const answerRecord = answer as Record<string, unknown>;
+      const id = readConfigString(answerRecord, "id");
+      const text = readConfigString(answerRecord, "text");
+      return id && text ? { id, text } : null;
+    })
+    .filter((answer): answer is { id: string; text: string } => Boolean(answer));
+}
+
+function readConfigStringArray(config: Record<string, unknown>, key: string) {
+  const value = config[key];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "")
+    : [];
+}
+
+function readSuggestedHotspots(config: Record<string, unknown>) {
+  const value = config.suggestedHotspots;
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((hotspot) => {
+      if (!hotspot || typeof hotspot !== "object") return null;
+      const hotspotRecord = hotspot as Record<string, unknown>;
+      const title = readConfigString(hotspotRecord, "title");
+      const description = readConfigString(hotspotRecord, "description");
+      return title || description ? { title, description } : null;
+    })
+    .filter(
+      (hotspot): hotspot is { title: string; description: string } =>
+        Boolean(hotspot)
+    );
+}
+
+function renderGeneratedBlockPreview(slide: GeneratedTrainingDraft["slides"][number]) {
+  const config = getDraftConfig(slide);
+
+  if (slide.slide_type === "knowledge_check" || slide.slide_type === "scenario") {
+    const answers = readConfigAnswers(config);
+    const correctAnswerId = readConfigString(config, "correctAnswerId");
+    const correctAnswer = answers.find((answer) => answer.id === correctAnswerId);
+    const prompt =
+      slide.slide_type === "scenario"
+        ? readConfigString(config, "question")
+        : readConfigString(config, "question") || slide.question_text;
+
+    return (
+      <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        {slide.slide_type === "scenario" && (
+          <p className="mb-2 text-sm leading-6 text-slate-700">
+            {readConfigString(config, "scenarioText")}
+          </p>
+        )}
+        <p className="text-sm font-semibold text-slate-900">{prompt}</p>
+        <ul className="mt-2 space-y-1 text-sm text-slate-600">
+          {answers.map((answer) => (
+            <li key={answer.id}>
+              {answer.id}. {answer.text}
+            </li>
+          ))}
+        </ul>
+        {correctAnswer && (
+          <p className="mt-2 text-xs font-semibold text-slate-500">
+            Correct answer: {correctAnswer.text}
+          </p>
+        )}
+        {readConfigString(config, "explanation") && (
+          <p className="mt-1 text-sm leading-6 text-slate-600">
+            {readConfigString(config, "explanation")}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  if (slide.slide_type === "reflection") {
+    return (
+      <div className="mt-3 rounded-lg border border-teal-200 bg-teal-50 p-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-teal-700">
+          Reflection Prompt
+        </p>
+        <p className="mt-1 text-sm leading-6 text-slate-700">
+          {readConfigString(config, "prompt")}
+        </p>
+      </div>
+    );
+  }
+
+  if (slide.slide_type === "recap") {
+    const items = readConfigStringArray(config, "items");
+    return (
+      <div className="mt-3 rounded-lg border border-green-200 bg-green-50 p-3">
+        <ul className="list-disc space-y-1 pl-5 text-sm leading-6 text-slate-700">
+          {items.map((item, index) => (
+            <li key={`${item}-${index}`}>{item}</li>
+          ))}
+        </ul>
+        {readConfigString(config, "closingMessage") && (
+          <p className="mt-2 text-sm font-semibold text-green-900">
+            {readConfigString(config, "closingMessage")}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  if (slide.slide_type === "image_hotspot") {
+    const suggestedHotspots = readSuggestedHotspots(config);
+    return (
+      <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+        <p className="text-xs font-bold uppercase tracking-wide text-amber-700">
+          Admin setup required
+        </p>
+        <p className="mt-1 text-sm leading-6 text-amber-900">
+          {readConfigString(config, "imageSuggestion") || "Upload an image and place hotspots in the Training Builder."}
+        </p>
+        {suggestedHotspots.length > 0 && (
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-900">
+            {suggestedHotspots.map((hotspot, index) => (
+              <li key={`${hotspot.title}-${index}`}>
+                <span className="font-semibold">{hotspot.title}</span>
+                {hotspot.description ? `: ${hotspot.description}` : ""}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
+  return null;
 }
 
 function getStatusBadgeClass(status: string) {
@@ -2118,7 +2268,7 @@ export default function ImportTrainingPage() {
                 Contents
               </p>
               <p className="mt-2 text-sm font-semibold text-slate-900">
-                {generatedDraft.slides.length} slides, {generatedDraft.quiz.length} quiz questions
+                {generatedDraft.slides.length} blocks, {generatedDraft.quiz.length} quiz questions
               </p>
             </div>
           </div>
@@ -2148,7 +2298,7 @@ export default function ImportTrainingPage() {
           <div className="mt-6 grid gap-6 lg:grid-cols-2">
             <div>
               <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">
-                Slide List
+                Learning Blocks
               </h3>
               <div className="mt-3 space-y-3">
                 {generatedDraft.slides.map((slide) => (
@@ -2160,6 +2310,12 @@ export default function ImportTrainingPage() {
                       <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
                         {formatSlideType(slide.slide_type)}
                       </span>
+                      {slide.slide_type === "image_hotspot" &&
+                        getDraftConfig(slide).requiresAdminSetup === true && (
+                          <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                            Admin setup required
+                          </span>
+                        )}
                     </div>
                     <p className="text-sm font-bold text-slate-900">
                       {slide.slide_order}. {slide.title}
@@ -2172,27 +2328,7 @@ export default function ImportTrainingPage() {
                         headingClassName="text-sm font-bold leading-6 text-slate-900"
                       />
                     </div>
-                    {slide.slide_type === "knowledge_check" && (
-                      <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                        <p className="text-sm font-semibold text-slate-900">
-                          {slide.question_text}
-                        </p>
-                        <ul className="mt-2 space-y-1 text-sm text-slate-600">
-                          <li>A. {slide.answer_a}</li>
-                          <li>B. {slide.answer_b}</li>
-                          <li>C. {slide.answer_c}</li>
-                          <li>D. {slide.answer_d}</li>
-                        </ul>
-                        <p className="mt-2 text-xs font-semibold text-slate-500">
-                          Correct answer: {slide.correct_answer}
-                        </p>
-                        {slide.explanation && (
-                          <p className="mt-1 text-sm leading-6 text-slate-600">
-                            {slide.explanation}
-                          </p>
-                        )}
-                      </div>
-                    )}
+                    {renderGeneratedBlockPreview(slide)}
                     {slide.coach_note && (
                       <div className="mt-3 rounded-lg bg-slate-50 px-3 py-2">
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">

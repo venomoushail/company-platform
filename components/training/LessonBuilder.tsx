@@ -1,6 +1,14 @@
 "use client";
 
-import { Dispatch, SetStateAction, useEffect, useRef, useState } from "react";
+import {
+  Dispatch,
+  MouseEvent,
+  ReactNode,
+  SetStateAction,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   DndContext,
   DragEndEvent,
@@ -18,20 +26,46 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   Bold,
+  BookOpen,
+  CheckCircle2,
+  CircleHelp,
   Heading2,
   Image as ImageIcon,
   Italic,
   List,
   ListOrdered,
+  MapPin,
+  MessageSquareText,
   Palette,
+  PencilLine,
   Pilcrow,
+  Plus,
 } from "lucide-react";
 import Image from "next/image";
+import type {
+  ContentBlockConfig,
+  ImageHotspotConfig,
+  KnowledgeCheckConfig,
+  LearningBlockAnswer,
+  LearningBlockConfig,
+  LearningBlockType,
+  RecapBlockConfig,
+  ReflectionBlockConfig,
+  ScenarioBlockConfig,
+} from "@/types/learningBlocks";
+import {
+  getDefaultLearningBlockConfig,
+  normalizeLearningBlockConfig,
+  normalizeLearningBlockType,
+  regenerateLearningBlockConfigIds,
+} from "@/types/learningBlocks";
 
 export type Slide = {
   id: number;
   title: string;
   body: string;
+  slide_type: LearningBlockType;
+  config_json: LearningBlockConfig;
   media?: SlideMedia;
   isComplete: boolean;
 };
@@ -147,11 +181,83 @@ const bodyTextColorOptions = [
   label: string;
 }[];
 
+const learningBlockTemplates = [
+  {
+    type: "content",
+    label: "Content",
+    icon: BookOpen,
+    title: "Content",
+    body: "<p>Introduce the key idea, procedure, or policy learners need to understand.</p>",
+    description: "Teach with text, images, headings, and lists.",
+    isInteractive: false,
+  },
+  {
+    type: "knowledge_check",
+    label: "Knowledge Check",
+    icon: CircleHelp,
+    title: "Knowledge Check",
+    body: "",
+    description: "Ask an ungraded question and explain the correct answer.",
+    isInteractive: true,
+  },
+  {
+    type: "image_hotspot",
+    label: "Image Hotspot",
+    icon: MapPin,
+    title: "Image Hotspot",
+    body: "",
+    description: "Let learners explore labeled points on an image.",
+    isInteractive: true,
+  },
+  {
+    type: "scenario",
+    label: "Scenario",
+    icon: MessageSquareText,
+    title: "Scenario",
+    body: "",
+    description: "Present a realistic situation and let learners choose a response.",
+    isInteractive: true,
+  },
+  {
+    type: "reflection",
+    label: "Reflection",
+    icon: PencilLine,
+    title: "Reflection",
+    body: "",
+    description: "Ask learners to think or write about a concept.",
+    isInteractive: true,
+  },
+  {
+    type: "recap",
+    label: "Recap",
+    icon: CheckCircle2,
+    title: "Recap",
+    body: "",
+    description: "Summarize key points before continuing.",
+    isInteractive: false,
+  },
+] satisfies {
+  type: LearningBlockType;
+  label: string;
+  icon: typeof BookOpen;
+  title: string;
+  body: string;
+  description: string;
+  isInteractive: boolean;
+}[];
+
 const inlineMarkupPattern =
   /(\[color=(blue|green|red|orange|gray|black)\][\s\S]+?\[\/color\]|\*\*[^*]+\*\*|\*[^*]+\*|__[^_]+__|_[^_]+_)/g;
 
 const maxSlideImageSizeBytes = 5 * 1024 * 1024;
 const acceptedSlideImageTypes = ["image/jpeg", "image/png", "image/webp"];
+
+function getLearningBlockTemplate(type: LearningBlockType) {
+  return (
+    learningBlockTemplates.find((template) => template.type === type) ??
+    learningBlockTemplates[0]
+  );
+}
 
 const editorTextColorClasses: Record<Exclude<BodyTextColor, "default">, string> = {
   blue: "text-blue-700",
@@ -537,6 +643,8 @@ function SortableSlideButton({
   const wordCount = plainBody
     ? plainBody.split(/\s+/).length
     : 0;
+  const blockTemplate = getLearningBlockTemplate(slide.slide_type);
+  const BlockIcon = blockTemplate.icon;
 
   return (
     <div
@@ -581,6 +689,10 @@ function SortableSlideButton({
             <p className="truncate font-semibold">
               {index + 1}. {slide.title || "Untitled Slide"}
             </p>
+            <p className="mt-1 inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400">
+              <BlockIcon size={13} strokeWidth={2.4} aria-hidden="true" />
+              {blockTemplate.label}
+            </p>
 
             <p className="mt-1 line-clamp-2 text-xs text-slate-500">
               {plainBody || "No content added yet."}
@@ -616,6 +728,7 @@ export default function SlideBuilder({
   onFocusBuilder,
 }: SlideBuilderProps) {
   const [isOutlineCollapsed, setIsOutlineCollapsed] = useState(false);
+  const [isBlockMenuOpen, setIsBlockMenuOpen] = useState(false);
   const [selectedBodyColor, setSelectedBodyColor] =
     useState<BodyTextColor>("default");
   const [imageError, setImageError] = useState("");
@@ -657,16 +770,25 @@ export default function SlideBuilder({
     };
   }, []);
 
-  function addSlide() {
+  function addLearningBlock(blockType: LearningBlockType) {
+    const template = getLearningBlockTemplate(blockType);
+
     const newSlide: Slide = {
-      id: Date.now(),
-      title: "",
-      body: "",
+      id: Math.max(0, ...slides.map((slide) => slide.id)) + 1,
+      title: template.title,
+      body: template.body,
+      slide_type: template.type,
+      config_json: getDefaultLearningBlockConfig(template.type),
       isComplete: false,
     };
+    const insertIndex =
+      selectedSlideIndex >= 0 ? selectedSlideIndex + 1 : slides.length;
+    const updatedSlides = [...slides];
 
-    setSlides([...slides, newSlide]);
+    updatedSlides.splice(insertIndex, 0, newSlide);
+    setSlides(updatedSlides);
     setSelectedSlideId(newSlide.id);
+    setIsBlockMenuOpen(false);
   }
 
   function updateSlide(id: number, field: "title" | "body", value: string) {
@@ -677,13 +799,39 @@ export default function SlideBuilder({
     );
   }
 
+  function updateSelectedSlideConfig(config: LearningBlockConfig) {
+    setSlides(
+      slides.map((slide) =>
+        slide.id === selectedSlide.id ? { ...slide, config_json: config } : slide
+      )
+    );
+  }
+
   function updateSlideBody(id: number, value: string) {
     updateSlide(id, "body", value);
   }
 
   function updateSlideMedia(id: number, media?: SlideMedia) {
     setSlides(
-      slides.map((slide) => (slide.id === id ? { ...slide, media } : slide))
+      slides.map((slide) => {
+        if (slide.id !== id) return slide;
+
+        if (slide.slide_type !== "image_hotspot") return { ...slide, media };
+
+        const config = normalizeLearningBlockConfig(
+          "image_hotspot",
+          slide.config_json
+        ) as ImageHotspotConfig;
+
+        return {
+          ...slide,
+          media,
+          config_json: {
+            ...config,
+            imageUrl: media?.url ?? "",
+          },
+        };
+      })
     );
   }
 
@@ -899,10 +1047,14 @@ export default function SlideBuilder({
 
     const copiedSlide: Slide = {
       ...slideToCopy,
-      id: Date.now(),
+      id: Math.max(0, ...slides.map((slide) => slide.id)) + 1,
       title: slideToCopy.title
         ? `${slideToCopy.title} Copy`
         : "Untitled Slide Copy",
+      config_json: regenerateLearningBlockConfigIds(
+        slideToCopy.slide_type,
+        slideToCopy.config_json
+      ),
       isComplete: false,
     };
 
@@ -940,13 +1092,59 @@ export default function SlideBuilder({
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={addSlide}
-          className="company-primary-button rounded-lg px-4 py-2 text-sm font-semibold"
-        >
-          + Add Slide
-        </button>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setIsBlockMenuOpen((isOpen) => !isOpen)}
+            className="company-primary-button flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold"
+            aria-expanded={isBlockMenuOpen}
+            aria-haspopup="menu"
+          >
+            <Plus size={16} strokeWidth={2.4} aria-hidden="true" />
+            Add Learning Block
+          </button>
+
+          {isBlockMenuOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 z-20 mt-2 w-80 overflow-hidden rounded-lg border border-slate-200 bg-white py-2 shadow-xl"
+            >
+              {learningBlockTemplates.map((block) => {
+                const Icon = block.icon;
+
+                return (
+                  <button
+                    key={block.type}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => addLearningBlock(block.type)}
+                    className="flex w-full items-start gap-3 px-4 py-3 text-left text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    <Icon
+                      size={17}
+                      strokeWidth={2.3}
+                      className="text-slate-500"
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2 font-semibold text-slate-900">
+                        {block.label}
+                        {block.isInteractive && (
+                          <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-blue-700">
+                            Interactive
+                          </span>
+                        )}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-500">
+                        {block.description}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       <div
@@ -1108,10 +1306,10 @@ export default function SlideBuilder({
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-semibold text-slate-700">
-                Slide Body
-              </label>
+              <div>
+                <label className="block text-sm font-semibold text-slate-700">
+                  Slide Body
+                </label>
               <div className="mt-2 flex flex-wrap gap-1 rounded-t-lg border border-b-0 border-slate-300 bg-slate-50 px-2 py-2">
                 {bodyFormatButtons.map((button) => {
                   const Icon = button.icon;
@@ -1169,6 +1367,11 @@ export default function SlideBuilder({
                 className="min-h-[260px] w-full rounded-b-lg border border-slate-300 px-4 py-3 text-sm leading-6 text-slate-900 outline-none focus:border-blue-600 [&:empty:before]:text-slate-400 [&:empty:before]:content-[attr(data-placeholder)] [&_li]:pl-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:space-y-1 [&_ol]:pl-6 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:space-y-1 [&_ul]:pl-6"
               />
             </div>
+
+            <LearningBlockConfigEditor
+              slide={selectedSlide}
+              onChange={updateSelectedSlideConfig}
+            />
 
             <div>
               <label className="block text-sm font-semibold text-slate-700">
@@ -1255,5 +1458,527 @@ export default function SlideBuilder({
         </section>
       </div>
     </div>
+  );
+}
+
+function nextItemId(prefix: string, existingIds: string[]) {
+  let index = existingIds.length + 1;
+  let nextId = `${prefix}-${index}`;
+
+  while (existingIds.includes(nextId)) {
+    index += 1;
+    nextId = `${prefix}-${index}`;
+  }
+
+  return nextId;
+}
+
+function ConfigShell({
+  children,
+  title,
+}: {
+  children: ReactNode;
+  title: string;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <p className="text-sm font-bold text-slate-900">{title}</p>
+      <div className="mt-4 space-y-4">{children}</div>
+    </div>
+  );
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="text-sm font-semibold text-slate-700">{label}</span>
+      <input
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+      />
+    </label>
+  );
+}
+
+function TextAreaField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="text-sm font-semibold text-slate-700">{label}</span>
+      <textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="mt-2 min-h-24 w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm leading-6 text-slate-900 outline-none focus:border-blue-600"
+      />
+    </label>
+  );
+}
+
+function AnswerEditor({
+  answers,
+  correctAnswerId,
+  onAnswersChange,
+  onCorrectAnswerChange,
+  label,
+}: {
+  answers: LearningBlockAnswer[];
+  correctAnswerId: string;
+  onAnswersChange: (answers: LearningBlockAnswer[]) => void;
+  onCorrectAnswerChange: (answerId: string) => void;
+  label: string;
+}) {
+  function updateAnswer(answerId: string, text: string) {
+    onAnswersChange(
+      answers.map((answer) => (answer.id === answerId ? { ...answer, text } : answer))
+    );
+  }
+
+  function addAnswer() {
+    if (answers.length >= 6) return;
+    onAnswersChange([
+      ...answers,
+      { id: nextItemId("answer", answers.map((answer) => answer.id)), text: "" },
+    ]);
+  }
+
+  function removeAnswer(answerId: string) {
+    if (answers.length <= 2) return;
+    const nextAnswers = answers.filter((answer) => answer.id !== answerId);
+    onAnswersChange(nextAnswers);
+    if (correctAnswerId === answerId) {
+      onCorrectAnswerChange(nextAnswers[0]?.id ?? "");
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-sm font-semibold text-slate-700">{label}</p>
+      <div className="mt-2 space-y-2">
+        {answers.map((answer, index) => (
+          <div key={answer.id} className="flex flex-col gap-2 md:flex-row">
+            <label className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+              <input
+                type="radio"
+                checked={correctAnswerId === answer.id}
+                onChange={() => onCorrectAnswerChange(answer.id)}
+              />
+              Correct
+            </label>
+            <input
+              type="text"
+              value={answer.text}
+              onChange={(event) => updateAnswer(answer.id, event.target.value)}
+              placeholder={`Choice ${index + 1}`}
+              className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 outline-none focus:border-blue-600"
+            />
+            <button
+              type="button"
+              onClick={() => removeAnswer(answer.id)}
+              disabled={answers.length <= 2}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={addAnswer}
+        disabled={answers.length >= 6}
+        className="mt-3 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+      >
+        Add choice
+      </button>
+    </div>
+  );
+}
+
+function LearningBlockConfigEditor({
+  slide,
+  onChange,
+}: {
+  slide: Slide;
+  onChange: (config: LearningBlockConfig) => void;
+}) {
+  const type = normalizeLearningBlockType(slide.slide_type);
+
+  if (type === "knowledge_check") {
+    const config = normalizeLearningBlockConfig(
+      type,
+      slide.config_json
+    ) as KnowledgeCheckConfig;
+
+    return (
+      <ConfigShell title="Knowledge Check">
+        <TextField
+          label="Question"
+          value={config.question}
+          onChange={(question) => onChange({ ...config, question })}
+        />
+        <AnswerEditor
+          label="Answer choices"
+          answers={config.answers}
+          correctAnswerId={config.correctAnswerId}
+          onAnswersChange={(answers) => onChange({ ...config, answers })}
+          onCorrectAnswerChange={(correctAnswerId) =>
+            onChange({ ...config, correctAnswerId })
+          }
+        />
+        <TextAreaField
+          label="Explanation"
+          value={config.explanation}
+          onChange={(explanation) => onChange({ ...config, explanation })}
+        />
+        <ToggleField
+          label="Allow retry"
+          checked={config.allowRetry !== false}
+          onChange={(allowRetry) => onChange({ ...config, allowRetry })}
+        />
+      </ConfigShell>
+    );
+  }
+
+  if (type === "scenario") {
+    const config = normalizeLearningBlockConfig(
+      type,
+      slide.config_json
+    ) as ScenarioBlockConfig;
+
+    return (
+      <ConfigShell title="Scenario">
+        <TextAreaField
+          label="Scenario description"
+          value={config.scenarioText}
+          onChange={(scenarioText) => onChange({ ...config, scenarioText })}
+        />
+        <TextField
+          label="Decision question"
+          value={config.question}
+          onChange={(question) => onChange({ ...config, question })}
+        />
+        <AnswerEditor
+          label="Response options"
+          answers={config.answers}
+          correctAnswerId={config.correctAnswerId}
+          onAnswersChange={(answers) => onChange({ ...config, answers })}
+          onCorrectAnswerChange={(correctAnswerId) =>
+            onChange({ ...config, correctAnswerId })
+          }
+        />
+        <TextAreaField
+          label="Feedback / explanation"
+          value={config.explanation}
+          onChange={(explanation) => onChange({ ...config, explanation })}
+        />
+        <ToggleField
+          label="Allow retry"
+          checked={config.allowRetry !== false}
+          onChange={(allowRetry) => onChange({ ...config, allowRetry })}
+        />
+      </ConfigShell>
+    );
+  }
+
+  if (type === "reflection") {
+    const config = normalizeLearningBlockConfig(
+      type,
+      slide.config_json
+    ) as ReflectionBlockConfig;
+
+    return (
+      <ConfigShell title="Reflection">
+        <TextAreaField
+          label="Prompt"
+          value={config.prompt}
+          onChange={(prompt) => onChange({ ...config, prompt })}
+        />
+        <TextField
+          label="Placeholder"
+          value={config.placeholder ?? ""}
+          onChange={(placeholder) => onChange({ ...config, placeholder })}
+        />
+        <ToggleField
+          label="Response required before continuing"
+          checked={Boolean(config.responseRequired)}
+          onChange={(responseRequired) => onChange({ ...config, responseRequired })}
+        />
+      </ConfigShell>
+    );
+  }
+
+  if (type === "recap") {
+    const config = normalizeLearningBlockConfig(type, slide.config_json) as RecapBlockConfig;
+
+    function updateItem(index: number, value: string) {
+      onChange({
+        ...config,
+        items: config.items.map((item, itemIndex) =>
+          itemIndex === index ? value : item
+        ),
+      });
+    }
+
+    function removeItem(index: number) {
+      if (config.items.length <= 1) return;
+      onChange({
+        ...config,
+        items: config.items.filter((_, itemIndex) => itemIndex !== index),
+      });
+    }
+
+    return (
+      <ConfigShell title="Recap">
+        <div>
+          <p className="text-sm font-semibold text-slate-700">Takeaways</p>
+          <div className="mt-2 space-y-2">
+            {config.items.map((item, index) => (
+              <div key={index} className="flex gap-2">
+                <input
+                  type="text"
+                  value={item}
+                  onChange={(event) => updateItem(index, event.target.value)}
+                  placeholder={`Takeaway ${index + 1}`}
+                  className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm text-slate-900 outline-none focus:border-blue-600"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeItem(index)}
+                  disabled={config.items.length <= 1}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => onChange({ ...config, items: [...config.items, ""] })}
+            className="mt-3 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            Add takeaway
+          </button>
+        </div>
+        <TextAreaField
+          label="Closing message"
+          value={config.closingMessage ?? ""}
+          onChange={(closingMessage) => onChange({ ...config, closingMessage })}
+        />
+      </ConfigShell>
+    );
+  }
+
+  if (type === "image_hotspot") {
+    const config = normalizeLearningBlockConfig(
+      type,
+      slide.config_json,
+      { imageUrl: slide.media?.url }
+    ) as ImageHotspotConfig;
+
+    function addHotspot(event: MouseEvent<HTMLDivElement>) {
+      if (!config.imageUrl) return;
+      const bounds = event.currentTarget.getBoundingClientRect();
+      const xPercent = ((event.clientX - bounds.left) / bounds.width) * 100;
+      const yPercent = ((event.clientY - bounds.top) / bounds.height) * 100;
+
+      onChange({
+        ...config,
+        hotspots: [
+          ...config.hotspots,
+          {
+            id: nextItemId("hotspot", config.hotspots.map((hotspot) => hotspot.id)),
+            xPercent: Math.round(xPercent * 10) / 10,
+            yPercent: Math.round(yPercent * 10) / 10,
+            title: "",
+            description: "",
+            isRequired: true,
+          },
+        ],
+      });
+    }
+
+    function updateHotspot(
+      hotspotId: string,
+      patch: Partial<ImageHotspotConfig["hotspots"][number]>
+    ) {
+      onChange({
+        ...config,
+        hotspots: config.hotspots.map((hotspot) =>
+          hotspot.id === hotspotId ? { ...hotspot, ...patch } : hotspot
+        ),
+      });
+    }
+
+    return (
+      <ConfigShell title="Image Hotspot">
+        <TextField
+          label="Instruction"
+          value={config.instruction}
+          onChange={(instruction) => onChange({ ...config, instruction })}
+        />
+        <ToggleField
+          label="Require all required hotspots before continuing"
+          checked={config.requireAllHotspots !== false}
+          onChange={(requireAllHotspots) =>
+            onChange({ ...config, requireAllHotspots })
+          }
+        />
+        <div>
+          <p className="text-sm font-semibold text-slate-700">
+            Hotspot canvas
+          </p>
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={addHotspot}
+            className="relative mt-2 min-h-64 overflow-hidden rounded-lg border border-dashed border-slate-300 bg-white"
+            title="Click the image to add a hotspot"
+          >
+            {config.imageUrl ? (
+              <Image
+                src={config.imageUrl}
+                alt={slide.title || "Hotspot image"}
+                fill
+                sizes="(max-width: 768px) 100vw, 680px"
+                unoptimized
+                className="object-contain"
+              />
+            ) : (
+              <div className="flex min-h-64 items-center justify-center px-4 text-center text-sm font-semibold text-slate-500">
+                Upload a slide image below, then click the image to add hotspots.
+              </div>
+            )}
+            {config.hotspots.map((hotspot, index) => (
+              <span
+                key={hotspot.id}
+                className="absolute flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white bg-orange-600 text-sm font-bold text-white shadow"
+                style={{ left: `${hotspot.xPercent}%`, top: `${hotspot.yPercent}%` }}
+              >
+                {index + 1}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="space-y-3">
+          {config.hotspots.map((hotspot, index) => (
+            <div key={hotspot.id} className="rounded-lg border border-slate-200 bg-white p-3">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <p className="text-sm font-bold text-slate-900">
+                  Hotspot {index + 1}
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onChange({
+                      ...config,
+                      hotspots: config.hotspots.filter(
+                        (currentHotspot) => currentHotspot.id !== hotspot.id
+                      ),
+                    })
+                  }
+                  className="rounded-lg border border-red-200 px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"
+                >
+                  Delete
+                </button>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <TextField
+                  label="Title"
+                  value={hotspot.title}
+                  onChange={(title) => updateHotspot(hotspot.id, { title })}
+                />
+                <ToggleField
+                  label="Required"
+                  checked={hotspot.isRequired !== false}
+                  onChange={(isRequired) =>
+                    updateHotspot(hotspot.id, { isRequired })
+                  }
+                />
+              </div>
+              <div className="mt-3">
+                <TextAreaField
+                  label="Description"
+                  value={hotspot.description}
+                  onChange={(description) =>
+                    updateHotspot(hotspot.id, { description })
+                  }
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      </ConfigShell>
+    );
+  }
+
+  const config = normalizeLearningBlockConfig(type, slide.config_json);
+
+  return (
+    <ConfigShell title="Content Layout">
+      <label className="block">
+        <span className="text-sm font-semibold text-slate-700">Layout</span>
+        <select
+          value={(config as { layout?: string }).layout ?? "standard"}
+          onChange={(event) =>
+            onChange({
+              ...config,
+              layout: event.target.value as ContentBlockConfig["layout"],
+            })
+          }
+          className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+        >
+          <option value="standard">Standard</option>
+          <option value="image_top">Image top</option>
+          <option value="text_left">Text left</option>
+          <option value="text_right">Text right</option>
+        </select>
+      </label>
+    </ConfigShell>
+  );
+}
+
+function ToggleField({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className="h-4 w-4"
+      />
+      {label}
+    </label>
   );
 }

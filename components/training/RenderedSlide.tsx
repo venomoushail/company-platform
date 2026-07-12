@@ -1,11 +1,12 @@
-import LessonContent from "@/components/training/LessonContent";
-import Image from "next/image";
+import LearningBlockRenderer from "@/components/training/blocks/renderers/LearningBlockRenderer";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 export type RenderedSlideData = {
   id: number;
   title: string;
   body: string;
+  slide_type?: string;
+  config_json?: unknown;
   media?: {
     type: "image";
     url: string;
@@ -40,33 +41,15 @@ export function RenderedSlide({
   headingClassName,
 }: RenderedSlideProps) {
   return (
-    <>
-      <h1 className={titleClassName}>{slide.title || "Untitled Slide"}</h1>
-
-      {slide.media?.type === "image" && (
-        <div
-          className={`relative mt-6 overflow-hidden border border-slate-200 bg-slate-50 ${imageClassName}`}
-        >
-          <Image
-            src={slide.media.url}
-            alt={slide.media.alt || ""}
-            fill
-            sizes={imageSizes}
-            unoptimized
-            className="object-contain"
-          />
-        </div>
-      )}
-
-      <div className="mt-6">
-        <LessonContent
-          content={slide.body}
-          className={contentClassName}
-          emptyClassName={emptyContentClassName}
-          headingClassName={headingClassName}
-        />
-      </div>
-    </>
+    <LearningBlockRenderer
+      block={slide}
+      titleClassName={titleClassName}
+      imageClassName={imageClassName}
+      imageSizes={imageSizes}
+      contentClassName={contentClassName}
+      emptyContentClassName={emptyContentClassName}
+      headingClassName={headingClassName}
+    />
   );
 }
 

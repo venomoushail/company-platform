@@ -108,6 +108,7 @@ export type TrainingSlide = {
   body: string | null;
   image_url: string | null;
   slide_type: string;
+  config_json: unknown;
   speaker_notes: string | null;
   estimated_seconds: number | null;
   is_active: boolean;
@@ -429,8 +430,9 @@ export type Database = {
       };
       training_slides: {
         Row: TrainingSlide;
-        Insert: Omit<TrainingSlide, "id" | "created_at" | "updated_at"> & {
+        Insert: Omit<TrainingSlide, "id" | "created_at" | "updated_at" | "config_json"> & {
           id?: string;
+          config_json?: unknown;
           created_at?: string;
           updated_at?: string;
         };

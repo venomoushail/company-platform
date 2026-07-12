@@ -5,6 +5,11 @@ import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
 } from "@/lib/supabase/admin";
+import {
+  learningBlockTypes,
+  normalizeLearningBlockType,
+  validateLearningBlockConfig,
+} from "@/types/learningBlocks";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +18,7 @@ type SlidePayload = {
   body?: unknown;
   image_url?: unknown;
   slide_type?: unknown;
+  config_json?: unknown;
   speaker_notes?: unknown;
   estimated_seconds?: unknown;
 };
@@ -51,6 +57,7 @@ const validStatuses = new Set(["draft", "published", "archived"]);
 const validAudiences = new Set(["all", "position_specific"]);
 const validQuestionTypes = new Set(["multiple_choice", "true_false"]);
 const validCorrectAnswers = new Set(["A", "B", "C", "D"]);
+const validSlideTypes = new Set(learningBlockTypes);
 
 type FieldErrors = Partial<Record<string, string>>;
 
@@ -175,7 +182,25 @@ function readStringArray(value: unknown) {
     .filter(Boolean);
 }
 
-function validateSlides(value: unknown, fieldErrors: FieldErrors) {
+function getPublishBlockErrors(
+  slideType: ReturnType<typeof normalizeLearningBlockType>,
+  config: unknown
+) {
+  const configObject =
+    config && typeof config === "object" && !Array.isArray(config)
+      ? (config as Record<string, unknown>)
+      : {};
+
+  if (slideType === "image_hotspot") {
+    if (configObject.requiresAdminSetup === true) {
+      return ["Complete image hotspot setup before publishing."];
+    }
+  }
+
+  return validateLearningBlockConfig(slideType, config).errors;
+}
+
+function validateSlides(value: unknown, fieldErrors: FieldErrors, isPublishing: boolean) {
   if (!Array.isArray(value) || value.length === 0) {
     fieldErrors.slides = "Add at least one slide.";
     return [];
@@ -185,10 +210,28 @@ function validateSlides(value: unknown, fieldErrors: FieldErrors) {
     const slidePayload = (slide ?? {}) as SlidePayload;
     const title = readString(slidePayload.title) || `Slide ${index + 1}`;
     const estimatedSeconds = readInteger(slidePayload.estimated_seconds, null);
+    const slideType = normalizeLearningBlockType(slidePayload.slide_type);
+    const configValidation = validateLearningBlockConfig(
+      slideType,
+      slidePayload.config_json ?? {}
+    );
 
     if (estimatedSeconds !== null && estimatedSeconds < 0) {
       fieldErrors[`slides.${index}.estimated_seconds`] =
         "Estimated seconds must be 0 or greater.";
+    }
+
+    if (!validSlideTypes.has(slideType)) {
+      fieldErrors[`slides.${index}.slide_type`] = "Choose a valid learning block type.";
+    }
+
+    const publishErrors = isPublishing
+      ? getPublishBlockErrors(slideType, configValidation.config)
+      : [];
+
+    if (publishErrors.length > 0) {
+      fieldErrors[`slides.${index}.config_json`] =
+        `${title}: ${publishErrors.join(" ")}`;
     }
 
     return {
@@ -196,7 +239,8 @@ function validateSlides(value: unknown, fieldErrors: FieldErrors) {
       title,
       body: readString(slidePayload.body),
       image_url: readNullableString(slidePayload.image_url),
-      slide_type: readString(slidePayload.slide_type) || "content",
+      slide_type: slideType,
+      config_json: configValidation.config,
       speaker_notes: readNullableString(slidePayload.speaker_notes),
       estimated_seconds: estimatedSeconds,
       is_active: true,
@@ -294,7 +338,11 @@ function validateTrainingPayload(payload: TrainingPayload) {
   const assignedPositionIds = Array.from(
     new Set(readStringArray(payload.assigned_position_ids))
   );
-  const slides = validateSlides(payload.slides, fieldErrors);
+  const slides = validateSlides(
+    payload.slides,
+    fieldErrors,
+    normalizedStatus === "published"
+  );
   const quizQuestions = validateQuizQuestions(payload.quiz_questions, fieldErrors);
 
   if (!title) fieldErrors.title = "Title is required.";

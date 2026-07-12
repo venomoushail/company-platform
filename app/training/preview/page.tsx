@@ -1,31 +1,24 @@
 import AdminLayout from "@/components/layout/AdminLayout";
-import TrainingViewer from "@/components/training/LessonViewer";
-
-const slides = [
-  {
-    id: 1,
-    title: "Welcome to Hospitality 101",
-    body: "This training introduces the core expectations for delivering a great guest experience.",
-  },
-  {
-    id: 2,
-    title: "TIPS Philosophy",
-    body: "TIPS stands for Team, Integrity, Present, and Service. These are the values employees should bring into every shift.",
-  },
-  {
-    id: 3,
-    title: "Team",
-    body: "Team means showing up, helping others, and winning together. There is no such thing as 'not my job.'",
-  },
-];
 
 export default function TrainingPreviewPage() {
   return (
     <AdminLayout
       title="Training Preview"
-      description="Preview what employees will see before publishing."
+      description="Open a saved training to preview the employee experience."
     >
-      <TrainingViewer title="Hospitality 101" slides={slides} />
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-6">
+        <p className="font-semibold text-amber-900">Choose a training to preview</p>
+        <p className="mt-2 text-sm leading-6 text-amber-800">
+          This page no longer shows demo content. Open a training in the builder and
+          use Preview so the saved draft can be loaded exactly.
+        </p>
+        <a
+          href="/training"
+          className="mt-4 inline-flex rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50"
+        >
+          Go to Training Library
+        </a>
+      </div>
     </AdminLayout>
   );
 }

@@ -214,6 +214,8 @@ export default function EmployeeTrainingPage() {
         id: index + 1,
         title: slide.title,
         body: slide.body || "",
+        slide_type: slide.slide_type,
+        config_json: slide.config_json ?? {},
         media: slide.image_url
           ? {
               type: "image" as const,

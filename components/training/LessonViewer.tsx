@@ -1,11 +1,17 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import LearningBlockRenderer, {
+  getRenderableLearningBlock,
+} from "@/components/training/blocks/renderers/LearningBlockRenderer";
 import {
-  RenderedSlide,
   type RenderedSlideData,
 } from "@/components/training/RenderedSlide";
 import { ChevronLeft, ChevronRight, CheckCircle2 } from "lucide-react";
+import {
+  isLearningBlockComplete,
+  type LearningBlockInteractionState,
+} from "@/types/learningBlocks";
 
 type TrainingSlide = RenderedSlideData;
 
@@ -17,6 +23,7 @@ type TrainingViewerProps = {
   onComplete?: () => void;
   finalActionLabel?: string;
   completeLabel?: string;
+  mode?: "employee" | "preview";
 };
 
 type SlideNavigationPaneProps = {
@@ -30,6 +37,7 @@ type SlideControlsProps = {
   isFirstSlide: boolean;
   isLastSlide: boolean;
   isComplete: boolean;
+  isCurrentBlockReady: boolean;
   finalActionLabel: string;
   completeLabel: string;
   onPrevious: () => void;
@@ -38,6 +46,18 @@ type SlideControlsProps = {
 
 function getSlideLabel(slide: TrainingSlide, index: number) {
   return slide.title.trim() || `Slide ${index + 1}`;
+}
+
+function getSlideTypeLabel(slide: TrainingSlide) {
+  const { type } = getRenderableLearningBlock(slide);
+
+  if (type === "knowledge_check") return "Knowledge Check";
+  if (type === "image_hotspot") return "Hotspot";
+  if (type === "scenario") return "Scenario";
+  if (type === "reflection") return "Reflection";
+  if (type === "recap") return "Recap";
+  if (type === "callout") return "Callout";
+  return "Content";
 }
 
 function SlideNavigationPane({
@@ -86,11 +106,9 @@ function SlideNavigationPane({
                 <span className="line-clamp-2 font-semibold">
                   {getSlideLabel(slide, index)}
                 </span>
-                {slide.media?.type === "image" && (
-                  <span className="mt-1 block text-xs text-slate-400">
-                    Includes image
-                  </span>
-                )}
+                <span className="mt-1 block text-xs font-semibold text-slate-400">
+                  {getSlideTypeLabel(slide)}
+                </span>
               </span>
             </button>
           );
@@ -100,10 +118,22 @@ function SlideNavigationPane({
   );
 }
 
-function SlideContent({ slide }: { slide: TrainingSlide }) {
+function SlideContent({
+  slide,
+  state,
+  onStateChange,
+}: {
+  slide: TrainingSlide;
+  state: LearningBlockInteractionState;
+  onStateChange: (state: LearningBlockInteractionState) => void;
+}) {
   return (
     <div className="border-b border-slate-200 pb-8">
-      <RenderedSlide slide={slide} />
+      <LearningBlockRenderer
+        block={slide}
+        state={state}
+        onStateChange={onStateChange}
+      />
     </div>
   );
 }
@@ -112,6 +142,7 @@ function SlideControls({
   isFirstSlide,
   isLastSlide,
   isComplete,
+  isCurrentBlockReady,
   finalActionLabel,
   completeLabel,
   onPrevious,
@@ -132,10 +163,12 @@ function SlideControls({
       <button
         type="button"
         onClick={onNext}
-        disabled={isComplete}
+        disabled={isComplete || !isCurrentBlockReady}
         className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white transition ${
           isComplete
             ? "cursor-default bg-green-600"
+            : !isCurrentBlockReady
+            ? "cursor-not-allowed bg-slate-300"
             : "bg-blue-600 hover:bg-blue-700"
         }`}
       >
@@ -144,6 +177,8 @@ function SlideControls({
             <CheckCircle2 size={17} strokeWidth={2.4} />
             {completeLabel}
           </>
+        ) : !isCurrentBlockReady ? (
+          <>Complete this block to continue</>
         ) : isLastSlide ? (
           <>
             {finalActionLabel}
@@ -168,12 +203,16 @@ export default function TrainingViewer({
   onComplete,
   finalActionLabel = "Finish Lesson",
   completeLabel = "Lesson Complete",
+  mode = "employee",
 }: TrainingViewerProps) {
   const firstSlideId = slides[0]?.id;
   const [internalActiveSlideId, setInternalActiveSlideId] = useState<
     number | undefined
   >(firstSlideId);
   const [isComplete, setIsComplete] = useState(false);
+  const [interactionStateBySlide, setInteractionStateBySlide] = useState<
+    Record<string, LearningBlockInteractionState>
+  >({});
   const activeSlideId = selectedSlideId ?? internalActiveSlideId ?? firstSlideId;
 
   const currentSlideIndex = useMemo(() => {
@@ -196,6 +235,15 @@ export default function TrainingViewer({
   }
 
   const currentSlide = slides[currentSlideIndex];
+  const currentSlideKey = String(currentSlide.id);
+  const currentSlideInteractionState =
+    interactionStateBySlide[currentSlideKey] ?? {};
+  const currentRenderableBlock = getRenderableLearningBlock(currentSlide);
+  const isCurrentBlockReady = isLearningBlockComplete(
+    currentRenderableBlock.type,
+    currentRenderableBlock.config,
+    currentSlideInteractionState
+  );
   const progress = ((currentSlideIndex + 1) / slides.length) * 100;
   const isFirstSlide = currentSlideIndex === 0;
   const isLastSlide = currentSlideIndex === slides.length - 1;
@@ -214,6 +262,8 @@ export default function TrainingViewer({
   }
 
   function goToNextSlide() {
+    if (!isCurrentBlockReady) return;
+
     if (!isLastSlide) {
       selectSlide(slides[currentSlideIndex + 1].id);
       return;
@@ -222,7 +272,17 @@ export default function TrainingViewer({
     // TODO: Connect this to persisted lesson progress once the app has a
     // Supabase completion/enrollment pattern for employee course attempts.
     setIsComplete(true);
-    onComplete?.();
+    if (mode !== "preview") {
+      onComplete?.();
+    }
+  }
+
+  function resetPreview() {
+    setInteractionStateBySlide({});
+    setIsComplete(false);
+    if (firstSlideId !== undefined) {
+      selectSlide(firstSlideId);
+    }
   }
 
   return (
@@ -238,12 +298,23 @@ export default function TrainingViewer({
         <div className="mb-6">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm font-semibold text-blue-600">
-              Slide {currentSlideIndex + 1} of {slides.length}
+              Block {currentSlideIndex + 1} of {slides.length}
             </p>
 
-            <p className="text-sm text-slate-500">
-              {Math.round(progress)}% complete
-            </p>
+            <div className="flex items-center gap-3">
+              <p className="text-sm text-slate-500">
+                {Math.round(progress)}% complete
+              </p>
+              {mode === "preview" && (
+                <button
+                  type="button"
+                  onClick={resetPreview}
+                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Reset Preview
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="h-2 overflow-hidden rounded-full bg-slate-200">
@@ -254,12 +325,22 @@ export default function TrainingViewer({
           </div>
         </div>
 
-        <SlideContent slide={currentSlide} />
+        <SlideContent
+          slide={currentSlide}
+          state={currentSlideInteractionState}
+          onStateChange={(nextState) =>
+            setInteractionStateBySlide((currentState) => ({
+              ...currentState,
+              [currentSlideKey]: nextState,
+            }))
+          }
+        />
 
         <SlideControls
           isFirstSlide={isFirstSlide}
           isLastSlide={isLastSlide}
           isComplete={isComplete}
+          isCurrentBlockReady={isCurrentBlockReady}
           finalActionLabel={finalActionLabel}
           completeLabel={completeLabel}
           onPrevious={goToPreviousSlide}

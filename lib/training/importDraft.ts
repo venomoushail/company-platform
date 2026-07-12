@@ -1,10 +1,17 @@
+import {
+  normalizeLearningBlockConfig,
+  validateLearningBlockConfig,
+  type LearningBlockType,
+} from "@/types/learningBlocks";
+
 export type GeneratedSlideType =
   | "content"
   | "callout"
   | "scenario"
   | "recap"
   | "knowledge_check"
-  | "reflection";
+  | "reflection"
+  | "image_hotspot";
 
 export type GeneratedTrainingDraftMetadata = {
   prompt_version: string;
@@ -39,6 +46,7 @@ export type GeneratedTrainingDraft = {
     answer_d: string;
     correct_answer: "A" | "B" | "C" | "D" | "";
     explanation: string;
+    config: Record<string, unknown>;
   }[];
   quiz: {
     question_order: number;
@@ -61,6 +69,7 @@ const slideTypes = new Set<GeneratedSlideType>([
   "recap",
   "knowledge_check",
   "reflection",
+  "image_hotspot",
 ]);
 const unsafeHtmlBlockPattern =
   /<(script|style|iframe|object|embed|link|meta)[^>]*>[\s\S]*?<\/\1>/gi;
@@ -175,6 +184,221 @@ export const generatedTrainingDraftSchema = {
   },
 } as const;
 
+const generatedTrainingDraftV4ConfigSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "layout",
+    "question",
+    "answers",
+    "correctAnswerId",
+    "explanation",
+    "allowRetry",
+    "scenarioText",
+    "prompt",
+    "placeholder",
+    "responseRequired",
+    "items",
+    "closingMessage",
+    "imageUrl",
+    "instruction",
+    "hotspots",
+    "requireAllHotspots",
+    "requiresAdminSetup",
+    "imageSuggestion",
+    "suggestedHotspots",
+    "emphasis",
+  ],
+  properties: {
+    layout: { type: ["string", "null"] },
+    question: { type: ["string", "null"] },
+    answers: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "text"],
+        properties: {
+          id: { type: "string" },
+          text: { type: "string" },
+        },
+      },
+    },
+    correctAnswerId: { type: ["string", "null"] },
+    explanation: { type: ["string", "null"] },
+    allowRetry: { type: ["boolean", "null"] },
+    scenarioText: { type: ["string", "null"] },
+    prompt: { type: ["string", "null"] },
+    placeholder: { type: ["string", "null"] },
+    responseRequired: { type: ["boolean", "null"] },
+    items: {
+      type: "array",
+      items: { type: "string" },
+    },
+    closingMessage: { type: ["string", "null"] },
+    imageUrl: { type: ["string", "null"] },
+    instruction: { type: ["string", "null"] },
+    hotspots: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "id",
+          "xPercent",
+          "yPercent",
+          "radiusPercent",
+          "title",
+          "description",
+          "isRequired",
+        ],
+        properties: {
+          id: { type: "string" },
+          xPercent: { type: "number" },
+          yPercent: { type: "number" },
+          radiusPercent: { type: ["number", "null"] },
+          title: { type: "string" },
+          description: { type: "string" },
+          isRequired: { type: ["boolean", "null"] },
+        },
+      },
+    },
+    requireAllHotspots: { type: ["boolean", "null"] },
+    requiresAdminSetup: { type: ["boolean", "null"] },
+    imageSuggestion: { type: ["string", "null"] },
+    suggestedHotspots: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "description"],
+        properties: {
+          title: { type: "string" },
+          description: { type: "string" },
+        },
+      },
+    },
+    emphasis: { type: ["string", "null"] },
+  },
+} as const;
+
+export const generatedTrainingDraftV4Schema = {
+  ...generatedTrainingDraftSchema,
+  properties: {
+    ...generatedTrainingDraftSchema.properties,
+    slides: {
+      ...generatedTrainingDraftSchema.properties.slides,
+      items: {
+        ...generatedTrainingDraftSchema.properties.slides.items,
+        required: [
+          ...generatedTrainingDraftSchema.properties.slides.items.required,
+          "config",
+        ],
+        properties: {
+          ...generatedTrainingDraftSchema.properties.slides.items.properties,
+          slide_type: {
+            type: "string",
+            enum: [
+              "content",
+              "callout",
+              "scenario",
+              "recap",
+              "knowledge_check",
+              "reflection",
+              "image_hotspot",
+            ],
+          },
+          config: {
+            ...generatedTrainingDraftV4ConfigSchema,
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+function isSchemaObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+export function findStrictSchemaIssues(schema: unknown, path = "schema"): string[] {
+  if (!isSchemaObject(schema)) return [];
+
+  const issues: string[] = [];
+  const schemaType = schema.type;
+  const typeValues = Array.isArray(schemaType) ? schemaType : [schemaType];
+
+  if (typeValues.includes("object")) {
+    if (schema.additionalProperties !== false) {
+      issues.push(`${path} is an object schema without additionalProperties: false.`);
+    }
+
+    if (!isSchemaObject(schema.properties)) {
+      issues.push(`${path} is an object schema without a properties object.`);
+    } else {
+      const propertyNames = Object.keys(schema.properties);
+      const required = Array.isArray(schema.required) ? schema.required : [];
+
+      for (const propertyName of propertyNames) {
+        if (!required.includes(propertyName)) {
+          issues.push(`${path}.${propertyName} is defined but not required.`);
+        }
+      }
+
+      for (const requiredProperty of required) {
+        if (
+          typeof requiredProperty !== "string" ||
+          !(requiredProperty in schema.properties)
+        ) {
+          issues.push(`${path} requires unknown property ${String(requiredProperty)}.`);
+        }
+      }
+    }
+  }
+
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "properties" && isSchemaObject(value)) {
+      for (const [propertyName, propertySchema] of Object.entries(value)) {
+        issues.push(...findStrictSchemaIssues(propertySchema, `${path}.${propertyName}`));
+      }
+      continue;
+    }
+
+    if (key === "$defs" && isSchemaObject(value)) {
+      for (const [definitionName, definitionSchema] of Object.entries(value)) {
+        issues.push(
+          ...findStrictSchemaIssues(definitionSchema, `${path}.$defs.${definitionName}`)
+        );
+      }
+      continue;
+    }
+
+    if (key === "items") {
+      issues.push(...findStrictSchemaIssues(value, `${path}.items`));
+      continue;
+    }
+
+    if ((key === "anyOf" || key === "oneOf" || key === "allOf") && Array.isArray(value)) {
+      value.forEach((item, index) => {
+        issues.push(...findStrictSchemaIssues(item, `${path}.${key}[${index}]`));
+      });
+    }
+  }
+
+  return issues;
+}
+
+const generatedTrainingDraftV4SchemaIssues = findStrictSchemaIssues(
+  generatedTrainingDraftV4Schema,
+  "generatedTrainingDraftV4Schema"
+);
+
+if (generatedTrainingDraftV4SchemaIssues.length > 0) {
+  throw new Error(
+    `Invalid v4 structured-output schema:\n${generatedTrainingDraftV4SchemaIssues.join("\n")}`
+  );
+}
+
 function readObject(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -221,6 +445,108 @@ function readInteger(value: unknown, fallback: number) {
   return Math.trunc(numberValue);
 }
 
+function answerId(label: string) {
+  return `answer-${label.toLowerCase()}`;
+}
+
+function buildLegacySlideConfig(
+  slideType: GeneratedSlideType,
+  slideObject: Record<string, unknown>,
+  body: string
+) {
+  const configObject = readObject(slideObject.config);
+
+  if (configObject) return configObject;
+
+  const correctAnswer = readString(slideObject.correct_answer).toUpperCase();
+
+  if (slideType === "knowledge_check") {
+    return {
+      question: readString(slideObject.question_text),
+      answers: [
+        { id: "answer-a", text: readString(slideObject.answer_a) },
+        { id: "answer-b", text: readString(slideObject.answer_b) },
+        { id: "answer-c", text: readString(slideObject.answer_c) },
+        { id: "answer-d", text: readString(slideObject.answer_d) },
+      ].filter((answer) => answer.text),
+      correctAnswerId: answerId(correctAnswer || "A"),
+      explanation: readString(slideObject.explanation),
+      allowRetry: true,
+    };
+  }
+
+  if (slideType === "scenario") {
+    return {
+      scenarioText: body,
+      question: readString(slideObject.question_text),
+      answers: [
+        { id: "answer-a", text: readString(slideObject.answer_a) },
+        { id: "answer-b", text: readString(slideObject.answer_b) },
+        { id: "answer-c", text: readString(slideObject.answer_c) },
+        { id: "answer-d", text: readString(slideObject.answer_d) },
+      ].filter((answer) => answer.text),
+      correctAnswerId: answerId(correctAnswer || "A"),
+      explanation: readString(slideObject.explanation),
+      allowRetry: true,
+    };
+  }
+
+  if (slideType === "reflection") {
+    return {
+      prompt: body,
+      placeholder: "Write your response here...",
+      responseRequired: false,
+    };
+  }
+
+  if (slideType === "recap") {
+    return {
+      items: [body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim()].filter(Boolean),
+      closingMessage: "",
+    };
+  }
+
+  if (slideType === "image_hotspot") {
+    return {
+      imageUrl: "",
+      instruction: readString(slideObject.instruction),
+      hotspots: [],
+      requireAllHotspots: true,
+      requiresAdminSetup: true,
+      imageSuggestion: readString(slideObject.image_suggestion),
+      suggestedHotspots: [],
+    };
+  }
+
+  if (slideType === "callout") {
+    return {
+      emphasis: "key_takeaway",
+    };
+  }
+
+  return {
+    layout: "standard",
+  };
+}
+
+function isGeneratedConfigValid(
+  slideType: GeneratedSlideType,
+  config: Record<string, unknown>
+) {
+  if (
+    slideType === "image_hotspot" &&
+    config.requiresAdminSetup === true &&
+    Array.isArray(config.suggestedHotspots)
+  ) {
+    return true;
+  }
+
+  return validateLearningBlockConfig(
+    slideType as LearningBlockType,
+    config
+  ).errors.length === 0;
+}
+
 function sanitizeAiSlideHtml(value: string) {
   return value
     .replace(/<!--[\s\S]*?-->/g, "")
@@ -264,43 +590,55 @@ export function normalizeGeneratedTrainingDraft(
           const slideObject = readObject(slide);
           if (!slideObject) return null;
 
-          const slideTitle = readString(slideObject.title);
-          const body = sanitizeAiSlideHtml(readString(slideObject.body));
-          const slideType = readString(slideObject.slide_type);
-          const correctAnswer = readString(slideObject.correct_answer).toUpperCase();
+	          const slideTitle = readString(slideObject.title);
+	          const body = sanitizeAiSlideHtml(readString(slideObject.body));
+	          const slideType = readString(slideObject.slide_type);
+	          const correctAnswer = readString(slideObject.correct_answer).toUpperCase();
+	          const normalizedSlideType = slideType as GeneratedSlideType;
+	          const config = slideTypes.has(normalizedSlideType)
+	            ? buildLegacySlideConfig(normalizedSlideType, slideObject, body)
+	            : {};
 
-          if (!slideTitle || !body || !slideTypes.has(slideType as GeneratedSlideType)) {
-            return null;
-          }
+	          if (!slideTitle || !slideTypes.has(normalizedSlideType)) {
+	            return null;
+	          }
 
-          if (
-            slideType === "knowledge_check" &&
-            (!readString(slideObject.question_text) ||
-              !readString(slideObject.answer_a) ||
-              !readString(slideObject.answer_b) ||
-              !readString(slideObject.answer_c) ||
-              !readString(slideObject.answer_d) ||
-              !correctAnswers.has(correctAnswer))
-          ) {
-            return null;
-          }
+	          if (
+	            slideType === "knowledge_check" &&
+	            !readObject(slideObject.config) &&
+	            (!readString(slideObject.question_text) ||
+	              !readString(slideObject.answer_a) ||
+	              !readString(slideObject.answer_b) ||
+	              !correctAnswers.has(correctAnswer))
+	          ) {
+	            return null;
+	          }
 
-          return {
-            slide_order: readInteger(slideObject.slide_order, index + 1),
-            slide_type: slideType as GeneratedSlideType,
-            title: slideTitle,
-            body,
+	          if (!isGeneratedConfigValid(normalizedSlideType, config)) {
+	            return null;
+	          }
+
+	          return {
+	            slide_order: readInteger(slideObject.slide_order, index + 1),
+	            slide_type: normalizedSlideType,
+	            title: slideTitle,
+	            body,
             coach_note: readString(slideObject.coach_note),
             question_text: readString(slideObject.question_text),
             answer_a: readString(slideObject.answer_a),
             answer_b: readString(slideObject.answer_b),
             answer_c: readString(slideObject.answer_c),
             answer_d: readString(slideObject.answer_d),
-            correct_answer: correctAnswers.has(correctAnswer)
-              ? (correctAnswer as GeneratedTrainingDraft["slides"][number]["correct_answer"])
-              : "",
-            explanation: readString(slideObject.explanation),
-          };
+	            correct_answer: correctAnswers.has(correctAnswer)
+	              ? (correctAnswer as GeneratedTrainingDraft["slides"][number]["correct_answer"])
+	              : "",
+	            explanation: readString(slideObject.explanation),
+	            config: normalizeLearningBlockConfig(
+	              normalizedSlideType as LearningBlockType,
+	              config,
+	              { title: slideTitle, body }
+	            ) as Record<string, unknown>,
+	          };
         })
         .filter((slide): slide is GeneratedTrainingDraft["slides"][number] =>
           Boolean(slide)

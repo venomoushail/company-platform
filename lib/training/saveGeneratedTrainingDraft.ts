@@ -1,36 +1,108 @@
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import type { GeneratedTrainingDraft } from "@/lib/training/importDraft";
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
+import type {
+  KnowledgeCheckConfig,
+  ScenarioBlockConfig,
+} from "@/types/learningBlocks";
 
 function buildSlideBody(slide: GeneratedTrainingDraft["slides"][number]) {
-  if (slide.slide_type !== "knowledge_check") return slide.body;
+  if (slide.slide_type === "knowledge_check" || slide.slide_type === "scenario") {
+    return slide.body;
+  }
 
-  const answerItems = [
-    ["A", slide.answer_a],
-    ["B", slide.answer_b],
-    ["C", slide.answer_c],
-    ["D", slide.answer_d],
-  ]
-    .map(([label, answer]) => `<li><strong>${label}.</strong> ${escapeHtml(answer)}</li>`)
-    .join("");
+  return slide.body;
+}
 
-  const explanationHtml = slide.explanation
-    ? `<p><strong>Explanation:</strong> ${escapeHtml(slide.explanation)}</p>`
-    : "";
+function answerId(label: string) {
+  return `answer-${label.toLowerCase()}`;
+}
 
-  return `${slide.body}
-<p><strong>Knowledge Check:</strong> ${escapeHtml(slide.question_text)}</p>
-<ul>${answerItems}</ul>
-<p><strong>Correct answer:</strong> ${escapeHtml(slide.correct_answer)}</p>
-${explanationHtml}`.trim();
+function buildSlideConfig(slide: GeneratedTrainingDraft["slides"][number]) {
+  if (slide.config && Object.keys(slide.config).length > 0) {
+    return slide.config;
+  }
+
+  if (slide.slide_type === "knowledge_check") {
+    const answers = [
+      ["A", slide.answer_a],
+      ["B", slide.answer_b],
+      ["C", slide.answer_c],
+      ["D", slide.answer_d],
+    ]
+      .filter(([, answer]) => answer.trim())
+      .map(([label, answer]) => ({
+        id: answerId(label),
+        text: answer,
+      }));
+
+    return {
+      question: slide.question_text,
+      answers,
+      correctAnswerId: answerId(slide.correct_answer || "A"),
+      explanation: slide.explanation,
+      allowRetry: true,
+    } satisfies KnowledgeCheckConfig;
+  }
+
+  if (slide.slide_type === "scenario") {
+    const answers = [
+      ["A", slide.answer_a],
+      ["B", slide.answer_b],
+      ["C", slide.answer_c],
+      ["D", slide.answer_d],
+    ]
+      .filter(([, answer]) => answer.trim())
+      .map(([label, answer]) => ({
+        id: answerId(label),
+        text: answer,
+      }));
+
+    return {
+      scenarioText: slide.body,
+      question: slide.question_text || "What should the employee do next?",
+      answers,
+      correctAnswerId: answerId(slide.correct_answer || "A"),
+      explanation: slide.explanation,
+      allowRetry: true,
+    } satisfies ScenarioBlockConfig;
+  }
+
+  if (slide.slide_type === "reflection") {
+    return {
+      prompt: slide.body,
+      placeholder: "Write your response here...",
+      responseRequired: false,
+    };
+  }
+
+  if (slide.slide_type === "recap") {
+    return {
+      items: [slide.body.replace(/<[^>]*>/g, " ").trim()].filter(Boolean),
+      closingMessage: "",
+    };
+  }
+
+  if (slide.slide_type === "image_hotspot") {
+    return {
+      imageUrl: "",
+      instruction: "",
+      hotspots: [],
+      requireAllHotspots: true,
+      requiresAdminSetup: true,
+      imageSuggestion: "",
+      suggestedHotspots: [],
+    };
+  }
+
+  if (slide.slide_type === "callout") {
+    return {
+      emphasis: "key_takeaway",
+    };
+  }
+
+  return {
+    layout: "standard",
+  };
 }
 
 export async function saveGeneratedTrainingDraft({
@@ -81,6 +153,7 @@ export async function saveGeneratedTrainingDraft({
       body: buildSlideBody(slide),
       image_url: null,
       slide_type: slide.slide_type,
+      config_json: buildSlideConfig(slide),
       speaker_notes: slide.coach_note || null,
       estimated_seconds: null,
       is_active: true,

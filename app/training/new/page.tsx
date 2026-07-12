@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import AdminLayout from "@/components/layout/AdminLayout";
 import SlideBuilder, { Slide } from "@/components/training/LessonBuilder";
 import { SlidePreviewCard } from "@/components/training/RenderedSlide";
@@ -10,6 +11,11 @@ import TrainingAssignmentRulesPanel, {
   type AssignmentRulesSummary,
 } from "@/components/training/TrainingAssignmentRulesPanel";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import {
+  getDefaultLearningBlockConfig,
+  normalizeLearningBlockConfig,
+  normalizeLearningBlockType,
+} from "@/types/learningBlocks";
 import type {
   Position,
   QuizQuestionRow,
@@ -66,6 +72,7 @@ function normalizeStatus(status: "draft" | "published") {
 }
 
 export default function NewTrainingPage() {
+  const router = useRouter();
   const [moduleId, setModuleId] = useState<string | null>(null);
   const [moduleStatus, setModuleStatus] = useState<string | null>(null);
   const [trainingTitle, setTrainingTitle] = useState("");
@@ -102,6 +109,8 @@ export default function NewTrainingPage() {
       id: 1,
       title: "",
       body: "",
+      slide_type: "content",
+      config_json: getDefaultLearningBlockConfig("content"),
       isComplete: false,
     },
   ]);
@@ -326,6 +335,16 @@ const selectedQuestion =
                 id: index + 1,
                 title: slide.title,
                 body: slide.body || "",
+                slide_type: normalizeLearningBlockType(slide.slide_type),
+                config_json: normalizeLearningBlockConfig(
+                  normalizeLearningBlockType(slide.slide_type),
+                  slide.config_json ?? {},
+                  {
+                    title: slide.title,
+                    body: slide.body || "",
+                    imageUrl: slide.image_url,
+                  }
+                ),
                 media: slide.image_url
                   ? {
                       type: "image" as const,
@@ -335,7 +354,16 @@ const selectedQuestion =
                   : undefined,
                 isComplete: true,
               }))
-            : [{ id: 1, title: "", body: "", isComplete: false }];
+            : [
+                {
+                  id: 1,
+                  title: "",
+                  body: "",
+                  slide_type: "content" as const,
+                  config_json: getDefaultLearningBlockConfig("content"),
+                  isComplete: false,
+                },
+              ];
 
         setSlides(loadedSlides);
         setSelectedSlideId(loadedSlides[0].id);
@@ -456,7 +484,8 @@ const selectedQuestion =
         title: slide.title || `Slide ${index + 1}`,
         body: slide.body,
         image_url: slide.media?.url || null,
-        slide_type: "content",
+        slide_type: slide.slide_type,
+        config_json: slide.config_json,
         speaker_notes: null,
         estimated_seconds: null,
       })),
@@ -506,11 +535,13 @@ const selectedQuestion =
           ? `Training published.${assignmentMessage}`
           : "Training draft saved."
       );
+      return detail;
     } catch (error) {
       setSaveStatus("error");
       setFormMessage(
         error instanceof Error ? error.message : "Unable to save training."
       );
+      return null;
     }
   }
 
@@ -521,6 +552,17 @@ const selectedQuestion =
     }
 
     saveTraining("published");
+  }
+
+  async function handlePreviewClick() {
+    const detail = await saveTraining("draft");
+
+    if (!detail?.module.id) {
+      setFormMessage("Save the training before previewing.");
+      return;
+    }
+
+    router.push(`/training/${detail.module.id}/preview`);
   }
 
   async function handleApplyAssignmentsNow() {
@@ -874,12 +916,14 @@ const selectedQuestion =
               Cancel
             </a>
 
-            <a
-              href="/training/preview"
-              className="rounded-lg border border-blue-600 px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50"
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={handlePreviewClick}
+              className="rounded-lg border border-blue-600 px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Preview
-            </a>
+              {saveStatus === "loading" ? "Saving..." : "Preview"}
+            </button>
 
             <button
               type="button"
