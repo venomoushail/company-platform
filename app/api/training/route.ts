@@ -5,7 +5,9 @@ import {
   createAdminSupabaseClient,
   getSupabaseAdminConfig,
 } from "@/lib/supabase/admin";
+import { normalizeCategorySlug } from "@/lib/training/formatCategoryLabel";
 import {
+  isPersistentImageUrl,
   learningBlockTypes,
   normalizeLearningBlockType,
   validateLearningBlockConfig,
@@ -193,7 +195,7 @@ function getPublishBlockErrors(
 
   if (slideType === "image_hotspot") {
     if (configObject.requiresAdminSetup === true) {
-      return ["Complete image hotspot setup before publishing."];
+      return ["upload a permanent image before publishing."];
     }
   }
 
@@ -211,9 +213,31 @@ function validateSlides(value: unknown, fieldErrors: FieldErrors, isPublishing: 
     const title = readString(slidePayload.title) || `Slide ${index + 1}`;
     const estimatedSeconds = readInteger(slidePayload.estimated_seconds, null);
     const slideType = normalizeLearningBlockType(slidePayload.slide_type);
+    const requestedImageUrl = readNullableString(slidePayload.image_url);
+    const configObject =
+      slidePayload.config_json &&
+      typeof slidePayload.config_json === "object" &&
+      !Array.isArray(slidePayload.config_json)
+        ? (slidePayload.config_json as Record<string, unknown>)
+        : {};
+    const configImageUrl = readNullableString(configObject.imageUrl);
+    const canonicalImageUrl = isPersistentImageUrl(requestedImageUrl)
+      ? requestedImageUrl
+      : isPersistentImageUrl(configImageUrl)
+        ? configImageUrl
+        : null;
+    const configInput =
+      slideType === "image_hotspot"
+        ? {
+            ...configObject,
+            imageUrl: canonicalImageUrl || "",
+            requiresAdminSetup:
+              configObject.requiresAdminSetup === true || !canonicalImageUrl,
+          }
+        : slidePayload.config_json ?? {};
     const configValidation = validateLearningBlockConfig(
       slideType,
-      slidePayload.config_json ?? {}
+      configInput
     );
 
     if (estimatedSeconds !== null && estimatedSeconds < 0) {
@@ -238,7 +262,7 @@ function validateSlides(value: unknown, fieldErrors: FieldErrors, isPublishing: 
       slide_order: index + 1,
       title,
       body: readString(slidePayload.body),
-      image_url: readNullableString(slidePayload.image_url),
+      image_url: canonicalImageUrl,
       slide_type: slideType,
       config_json: configValidation.config,
       speaker_notes: readNullableString(slidePayload.speaker_notes),
@@ -376,7 +400,7 @@ function validateTrainingPayload(payload: TrainingPayload) {
     values: {
       title,
       description: readNullableString(payload.description),
-      category: readNullableString(payload.category),
+      category: normalizeCategorySlug(readNullableString(payload.category)) || null,
       training_audience: normalizedAudience,
       passing_score: passingScore,
       estimated_minutes: estimatedMinutes,

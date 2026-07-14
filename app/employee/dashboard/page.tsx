@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import EmployeeLayout from "@/components/layout/EmployeeLayout";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { formatCategoryLabel } from "@/lib/training/formatCategoryLabel";
 import type { Company, Profile, TrainingModule } from "@/types/supabase";
 
 type EmployeeCompany = Pick<
@@ -354,7 +355,7 @@ function EmployeeDashboardContent() {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-                        {module.category || "General"}
+                        {formatCategoryLabel(module.category)}
                       </p>
                       <h2 className="mt-2 text-xl font-bold text-slate-900">
                         {module.title}

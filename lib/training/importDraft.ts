@@ -3,6 +3,7 @@ import {
   validateLearningBlockConfig,
   type LearningBlockType,
 } from "@/types/learningBlocks";
+import { normalizeCategorySlug } from "@/lib/training/formatCategoryLabel";
 
 export type GeneratedSlideType =
   | "content"
@@ -317,6 +318,12 @@ export const generatedTrainingDraftV4Schema = {
   },
 } as const;
 
+export function getGeneratedTrainingDraftSchema(promptVersion: string) {
+  return promptVersion === "v4"
+    ? generatedTrainingDraftV4Schema
+    : generatedTrainingDraftSchema;
+}
+
 function isSchemaObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -574,7 +581,7 @@ export function normalizeGeneratedTrainingDraft(
 
   const title = readString(moduleDraft.title);
   const description = readString(moduleDraft.description);
-  const category = readString(moduleDraft.category);
+  const category = normalizeCategorySlug(readString(moduleDraft.category));
   const estimatedMinutes = readInteger(moduleDraft.estimated_minutes, 20);
   const passingScore = readInteger(moduleDraft.passing_score, 80);
 

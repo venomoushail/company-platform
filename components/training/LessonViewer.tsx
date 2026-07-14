@@ -122,10 +122,12 @@ function SlideContent({
   slide,
   state,
   onStateChange,
+  isAdminPreview,
 }: {
   slide: TrainingSlide;
   state: LearningBlockInteractionState;
   onStateChange: (state: LearningBlockInteractionState) => void;
+  isAdminPreview: boolean;
 }) {
   return (
     <div className="border-b border-slate-200 pb-8">
@@ -133,6 +135,7 @@ function SlideContent({
         block={slide}
         state={state}
         onStateChange={onStateChange}
+        isAdminPreview={isAdminPreview}
       />
     </div>
   );
@@ -328,6 +331,7 @@ export default function TrainingViewer({
         <SlideContent
           slide={currentSlide}
           state={currentSlideInteractionState}
+          isAdminPreview={mode === "preview"}
           onStateChange={(nextState) =>
             setInteractionStateBySlide((currentState) => ({
               ...currentState,

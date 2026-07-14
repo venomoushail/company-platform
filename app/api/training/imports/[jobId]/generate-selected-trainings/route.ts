@@ -18,7 +18,7 @@ import {
   type RecommendedTrainingModule,
 } from "@/lib/training/curriculumBuilder";
 import {
-  generatedTrainingDraftSchema,
+  getGeneratedTrainingDraftSchema,
   normalizeGeneratedTrainingDraft,
 } from "@/lib/training/importDraft";
 import { saveGeneratedTrainingDraft } from "@/lib/training/saveGeneratedTrainingDraft";
@@ -239,6 +239,7 @@ async function generateDraftForModule({
   model: string;
 }) {
   const promptBuilder = getRestaurantTrainingPromptBuilder(promptVersion);
+  const draftSchema = getGeneratedTrainingDraftSchema(promptVersion);
   const openAiResponse = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -252,7 +253,7 @@ async function generateDraftForModule({
         format: {
           type: "json_schema",
           name: "training_draft",
-          schema: generatedTrainingDraftSchema,
+          schema: draftSchema,
           strict: true,
         },
       },

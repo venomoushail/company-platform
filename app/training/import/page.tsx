@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import AdminLayout from "@/components/layout/AdminLayout";
 import LessonContent from "@/components/training/LessonContent";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { formatCategoryLabel } from "@/lib/training/formatCategoryLabel";
 import {
   getGeneratedTrainingDraftMetadata,
   normalizeGeneratedTrainingDraft,
@@ -2138,7 +2139,7 @@ export default function ImportTrainingPage() {
                           Category
                         </p>
                         <p className="mt-1 text-sm font-semibold text-slate-800">
-                          {module.category}
+                          {formatCategoryLabel(module.category)}
                         </p>
                       </div>
                       <div>
@@ -2246,13 +2247,21 @@ export default function ImportTrainingPage() {
             </div>
           )}
 
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-5">
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 md:col-span-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 Course Title
               </p>
               <p className="mt-2 text-lg font-bold text-slate-900">
                 {generatedDraft.module.title}
+              </p>
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Category
+              </p>
+              <p className="mt-2 text-sm font-semibold text-slate-900">
+                {formatCategoryLabel(generatedDraft.module.category)}
               </p>
             </div>
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">

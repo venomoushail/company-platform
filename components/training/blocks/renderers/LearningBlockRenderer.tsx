@@ -46,6 +46,7 @@ type Props = {
   contentClassName?: string;
   emptyContentClassName?: string;
   headingClassName?: string;
+  isAdminPreview?: boolean;
 };
 
 export function getRenderableLearningBlock(block: LearningBlockRenderData) {
@@ -69,6 +70,7 @@ export default function LearningBlockRenderer({
   contentClassName,
   emptyContentClassName,
   headingClassName,
+  isAdminPreview,
 }: Props) {
   const [internalState, setInternalState] =
     useState<LearningBlockInteractionState>({});
@@ -103,6 +105,7 @@ export default function LearningBlockRenderer({
     return (
       <ScenarioBlockRenderer
         title={block.title}
+        body={block.body}
         config={config as ScenarioBlockConfig}
         state={effectiveState}
         onStateChange={setEffectiveState}
@@ -114,6 +117,7 @@ export default function LearningBlockRenderer({
     return (
       <ReflectionBlockRenderer
         title={block.title}
+        body={block.body}
         config={config as ReflectionBlockConfig}
         state={effectiveState}
         onStateChange={setEffectiveState}
@@ -129,6 +133,8 @@ export default function LearningBlockRenderer({
     return (
       <ImageHotspotBlockRenderer
         title={block.title}
+        imageAlt={block.media?.alt}
+        isAdminPreview={isAdminPreview}
         config={config as ImageHotspotConfig}
         state={effectiveState}
         onStateChange={setEffectiveState}

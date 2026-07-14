@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import AdminLayout from "@/components/layout/AdminLayout";
+import EmployeeReportsView from "@/components/reports/EmployeeReportsView";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import type {
   Location,
@@ -78,6 +79,7 @@ function formatPassed(value: boolean | null) {
 }
 
 export default function TrainingResultsPage() {
+  const [activeView, setActiveView] = useState<"training" | "employee">("training");
   const [results, setResults] = useState<TrainingResultRow[]>([]);
   const [modules, setModules] = useState<TrainingModule[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -173,6 +175,30 @@ export default function TrainingResultsPage() {
       title="Training Results"
       description="Review employee training assignment status and quiz outcomes."
     >
+      <div className="mb-6 inline-flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm" role="tablist" aria-label="Report view">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeView === "training"}
+          onClick={() => setActiveView("training")}
+          className={`rounded-lg px-4 py-2 text-sm font-bold transition ${activeView === "training" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-50"}`}
+        >
+          By Training
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeView === "employee"}
+          onClick={() => setActiveView("employee")}
+          className={`rounded-lg px-4 py-2 text-sm font-bold transition ${activeView === "employee" ? "bg-blue-600 text-white" : "text-slate-600 hover:bg-slate-50"}`}
+        >
+          By Employee
+        </button>
+      </div>
+
+      {activeView === "employee" ? (
+        <EmployeeReportsView />
+      ) : (
       <div className="space-y-6">
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(260px,1fr)_240px_220px_180px] xl:items-end">
@@ -361,6 +387,7 @@ export default function TrainingResultsPage() {
           )}
         </section>
       </div>
+      )}
     </AdminLayout>
   );
 }

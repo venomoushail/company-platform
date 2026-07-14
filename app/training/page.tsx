@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import AdminLayout from "@/components/layout/AdminLayout";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { formatCategoryLabel } from "@/lib/training/formatCategoryLabel";
 import type { TrainingModule } from "@/types/supabase";
 
 type TrainingListResponse = {
@@ -317,7 +318,7 @@ export default function TrainingPage() {
                   </td>
 
                   <td className="px-6 py-4 text-sm text-slate-600">
-                    {trainingModule.category || "Uncategorized"}
+                    {formatCategoryLabel(trainingModule.category)}
                   </td>
 
                   <td className="px-6 py-4 text-sm text-slate-600">

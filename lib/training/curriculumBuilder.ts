@@ -1,3 +1,5 @@
+import { normalizeCategorySlug } from "@/lib/training/formatCategoryLabel";
+
 export type RecommendedTrainingModule = {
   module_order: number;
   title: string;
@@ -117,7 +119,8 @@ export function normalizeGeneratedCurriculum(value: unknown): GeneratedCurriculu
             module_order: readInteger(moduleObject.module_order, index + 1),
             title,
             description: moduleDescription,
-            category: readString(moduleObject.category) || "General",
+            category:
+              normalizeCategorySlug(readString(moduleObject.category)) || "general",
             estimated_minutes: Math.max(
               1,
               readInteger(moduleObject.estimated_minutes, 10)

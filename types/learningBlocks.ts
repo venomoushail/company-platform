@@ -57,6 +57,7 @@ export type ImageHotspotConfig = {
     isRequired?: boolean;
   }[];
   requireAllHotspots?: boolean;
+  requiresAdminSetup?: boolean;
 };
 
 export type LearningBlockConfig =
@@ -102,6 +103,10 @@ function readString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function readEditableText(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
 function readBoolean(value: unknown, fallback: boolean) {
   return typeof value === "boolean" ? value : fallback;
 }
@@ -112,6 +117,25 @@ function readPercent(value: unknown, fallback: number) {
   if (!Number.isFinite(numberValue)) return fallback;
 
   return Math.min(100, Math.max(0, numberValue));
+}
+
+export function isPersistentImageUrl(value: unknown) {
+  if (typeof value !== "string" || !value.trim()) return false;
+
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      hostname !== "localhost" &&
+      hostname !== "127.0.0.1" &&
+      hostname !== "[::1]" &&
+      !hostname.endsWith(".localhost")
+    );
+  } catch {
+    return false;
+  }
 }
 
 function createStableId(prefix: string, index: number) {
@@ -283,13 +307,19 @@ export function normalizeLearningBlockConfig(
       ? configObject.hotspots.reduce<ImageHotspotConfig["hotspots"]>(
           (normalizedHotspots, hotspot, index) => {
             const hotspotObject = readObject(hotspot);
-            const title = readString(hotspotObject.title);
-            const description = readString(hotspotObject.description);
+            const id = readString(hotspotObject.id);
+            const title = readEditableText(hotspotObject.title);
+            const description = readEditableText(hotspotObject.description);
+            const hasPosition =
+              hotspotObject.xPercent !== undefined ||
+              hotspotObject.yPercent !== undefined;
 
-            if (!title && !description) return normalizedHotspots;
+            if (!id && !hasPosition && !title.trim() && !description.trim()) {
+              return normalizedHotspots;
+            }
 
             normalizedHotspots.push({
-              id: readString(hotspotObject.id) || createStableId("hotspot", index),
+              id: id || createStableId("hotspot", index),
               xPercent: readPercent(hotspotObject.xPercent, 50),
               yPercent: readPercent(hotspotObject.yPercent, 50),
               radiusPercent:
@@ -310,10 +340,12 @@ export function normalizeLearningBlockConfig(
     return {
       ...configObject,
       imageUrl: readString(configObject.imageUrl) || legacy?.imageUrl || "",
-      instruction:
-        readString(configObject.instruction) || "Select each marker to learn more.",
+      instruction: readEditableText(configObject.instruction).trim()
+        ? readEditableText(configObject.instruction)
+        : "Select each marker to learn more.",
       hotspots,
       requireAllHotspots: readBoolean(configObject.requireAllHotspots, true),
+      requiresAdminSetup: readBoolean(configObject.requiresAdminSetup, false),
     };
   }
 
@@ -374,7 +406,12 @@ export function validateLearningBlockConfig(
 
   if (type === "image_hotspot") {
     const hotspotConfig = normalizedConfig as ImageHotspotConfig;
-    if (!hotspotConfig.imageUrl.trim()) errors.push("Image is required.");
+    if (
+      hotspotConfig.requiresAdminSetup ||
+      !isPersistentImageUrl(hotspotConfig.imageUrl)
+    ) {
+      errors.push("Upload a permanent image before publishing.");
+    }
     if (hotspotConfig.hotspots.length === 0) {
       errors.push("Add at least one hotspot.");
     }

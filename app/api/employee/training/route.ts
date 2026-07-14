@@ -24,6 +24,7 @@ type EmployeeTrainingActionPayload = {
   action?: unknown;
   module_id?: unknown;
   answers?: unknown;
+  quiz_started_at?: unknown;
 };
 
 type TrainingStatus = {
@@ -88,6 +89,19 @@ function formatLocationName(location: Location | null) {
 
 function readString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readQuizStartedAt(value: unknown) {
+  const timestamp = Date.parse(readString(value));
+  const now = Date.now();
+  if (
+    !Number.isFinite(timestamp) ||
+    timestamp > now + 60_000 ||
+    now - timestamp > 86_400_000
+  ) {
+    return null;
+  }
+  return new Date(timestamp).toISOString();
 }
 
 function validateSupabaseAdminEnv() {
@@ -773,6 +787,7 @@ async function submitQuizAttempt({
   assignment,
   questions,
   selectedAnswers,
+  quizStartedAt,
 }: {
   supabase: ReturnType<typeof createAdminSupabaseClient>;
   employeeId: string;
@@ -781,6 +796,7 @@ async function submitQuizAttempt({
   assignment: TrainingAssignment;
   questions: QuizQuestionRow[];
   selectedAnswers: SelectedAnswers;
+  quizStartedAt: string | null;
 }) {
   const attempts = await fetchAttempts(supabase, employeeId, companyId, [module.id]);
   const latestAttempt = getLatestAttempt(attempts);
@@ -822,6 +838,12 @@ async function submitQuizAttempt({
     questions.length === 0 ? 0 : Math.round((correctCount / questions.length) * 100);
   const passed = score >= module.passing_score;
   const now = new Date().toISOString();
+  const durationSeconds = quizStartedAt
+    ? Math.max(
+        0,
+        Math.round((new Date(now).getTime() - new Date(quizStartedAt).getTime()) / 1000)
+      )
+    : null;
   const attemptNumber = attempts.length + 1;
 
   const { data: attempt, error: attemptError } = await supabase
@@ -835,8 +857,8 @@ async function submitQuizAttempt({
       correct_answers: correctCount,
       score,
       passed,
-      duration_seconds: null,
-      started_at: assignment.started_at ?? now,
+      duration_seconds: durationSeconds,
+      started_at: quizStartedAt ?? now,
       submitted_at: now,
       company_id: companyId,
     })
@@ -1142,6 +1164,7 @@ export async function POST(request: Request) {
         assignment,
         questions,
         selectedAnswers,
+        quizStartedAt: readQuizStartedAt(payload.quiz_started_at),
       });
 
       if (savedAttempt.response) return savedAttempt.response;

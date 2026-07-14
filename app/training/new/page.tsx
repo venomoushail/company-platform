@@ -12,7 +12,13 @@ import TrainingAssignmentRulesPanel, {
 } from "@/components/training/TrainingAssignmentRulesPanel";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
 import {
+  formatCategoryLabel,
+  normalizeCategorySlug,
+} from "@/lib/training/formatCategoryLabel";
+import {
+  type ImageHotspotConfig,
   getDefaultLearningBlockConfig,
+  isPersistentImageUrl,
   normalizeLearningBlockConfig,
   normalizeLearningBlockType,
 } from "@/types/learningBlocks";
@@ -89,6 +95,9 @@ export default function NewTrainingPage() {
   });
   const [loadStatus, setLoadStatus] = useState<SaveStatus>("idle");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [uploadingImageSlideIds, setUploadingImageSlideIds] = useState<Set<number>>(
+    () => new Set()
+  );
   const [formMessage, setFormMessage] = useState("");
   const [audienceError, setAudienceError] = useState("");
   const [assignmentSummary, setAssignmentSummary] =
@@ -136,7 +145,9 @@ const selectedQuestion =
   questions[0];
 
   const isEditMode = Boolean(moduleId);
-  const isBusy = loadStatus === "loading" || saveStatus === "loading";
+  const isUploadingImages = uploadingImageSlideIds.size > 0;
+  const isBusy =
+    loadStatus === "loading" || saveStatus === "loading" || isUploadingImages;
 
   const authHeaders = useCallback(async () => {
     const supabase = createBrowserSupabaseClient();
@@ -155,6 +166,46 @@ const selectedQuestion =
       Authorization: `Bearer ${data.session.access_token}`,
     };
   }, []);
+
+  const uploadTrainingImage = useCallback(
+    async (file: File, slideId: number) => {
+      const headers = await authHeaders();
+      const formData = new FormData();
+      formData.set("file", file);
+      formData.set("slideId", String(slideId));
+      if (moduleId) formData.set("moduleId", moduleId);
+
+      const response = await fetch("/api/training/images", {
+        method: "POST",
+        headers,
+        body: formData,
+      });
+      const data = (await response.json().catch(() => null)) as
+        | { url?: string; storagePath?: string; error?: string }
+        | null;
+
+      if (!response.ok || !data?.url || !data.storagePath) {
+        throw new Error(
+          getReadableErrorMessage(data, "Unable to upload the image. Please try again.")
+        );
+      }
+
+      return { url: data.url, storagePath: data.storagePath };
+    },
+    [authHeaders, moduleId]
+  );
+
+  const handleImageUploadStateChange = useCallback(
+    (slideId: number, isUploading: boolean) => {
+      setUploadingImageSlideIds((current) => {
+        const next = new Set(current);
+        if (isUploading) next.add(slideId);
+        else next.delete(slideId);
+        return next;
+      });
+    },
+    []
+  );
 
   const selectedQuestionPayload = useMemo(
     () =>
@@ -307,7 +358,9 @@ const selectedQuestion =
         setModuleStatus(detail.module.status);
         setFormState({
           description: detail.module.description || "",
-          category: detail.module.category || "",
+          category: detail.module.category
+            ? formatCategoryLabel(detail.module.category)
+            : "",
           estimatedMinutes:
             detail.module.estimated_minutes === null
               ? ""
@@ -331,29 +384,45 @@ const selectedQuestion =
 
         const loadedSlides =
           detail.slides.length > 0
-            ? detail.slides.map((slide, index) => ({
-                id: index + 1,
-                title: slide.title,
-                body: slide.body || "",
-                slide_type: normalizeLearningBlockType(slide.slide_type),
-                config_json: normalizeLearningBlockConfig(
-                  normalizeLearningBlockType(slide.slide_type),
+            ? detail.slides.map((slide, index) => {
+                const slideType = normalizeLearningBlockType(slide.slide_type);
+                const hasPersistentImage = isPersistentImageUrl(slide.image_url);
+                const normalizedConfig = normalizeLearningBlockConfig(
+                  slideType,
                   slide.config_json ?? {},
                   {
                     title: slide.title,
                     body: slide.body || "",
-                    imageUrl: slide.image_url,
+                    imageUrl: hasPersistentImage ? slide.image_url : null,
                   }
-                ),
-                media: slide.image_url
-                  ? {
-                      type: "image" as const,
-                      url: slide.image_url,
-                      alt: slide.title ? `${slide.title} image` : "Lesson slide image",
-                    }
-                  : undefined,
-                isComplete: true,
-              }))
+                );
+                const configJson =
+                  slideType === "image_hotspot" && !hasPersistentImage
+                    ? {
+                        ...normalizedConfig,
+                        imageUrl: "",
+                        requiresAdminSetup: true,
+                      }
+                    : normalizedConfig;
+
+                return {
+                  id: index + 1,
+                  title: slide.title,
+                  body: slide.body || "",
+                  slide_type: slideType,
+                  config_json: configJson,
+                  media: hasPersistentImage
+                    ? {
+                        type: "image" as const,
+                        url: slide.image_url!,
+                        alt: slide.title
+                          ? `${slide.title} image`
+                          : "Lesson slide image",
+                      }
+                    : undefined,
+                  isComplete: true,
+                };
+              })
             : [
                 {
                   id: 1,
@@ -453,6 +522,23 @@ const selectedQuestion =
     setAudienceError("");
     setShowPublishAssignmentConfirm(false);
 
+    if (isUploadingImages) {
+      setSaveStatus("error");
+      setFormMessage("Wait for the image upload to finish before saving or previewing.");
+      return;
+    }
+
+    const slideWithFailedImage = slides.find(
+      (slide) => slide.media && !isPersistentImageUrl(slide.media.url)
+    );
+    if (slideWithFailedImage) {
+      setSaveStatus("error");
+      setFormMessage(
+        `${slideWithFailedImage.title || "Image slide"}: image upload failed. Select the image again before saving or previewing.`
+      );
+      return;
+    }
+
     if (
       formState.trainingAudience === "position_specific" &&
       selectedPositionIds.length === 0
@@ -467,7 +553,7 @@ const selectedQuestion =
       id: moduleId,
       title: trainingTitle,
       description: formState.description,
-      category: formState.category,
+      category: normalizeCategorySlug(formState.category),
       training_audience: formState.trainingAudience,
       passing_score: formState.passingScore,
       estimated_minutes: formState.estimatedMinutes,
@@ -480,15 +566,29 @@ const selectedQuestion =
         formState.trainingAudience === "position_specific"
           ? selectedPositionIds
           : [],
-      slides: slides.map((slide, index) => ({
-        title: slide.title || `Slide ${index + 1}`,
-        body: slide.body,
-        image_url: slide.media?.url || null,
-        slide_type: slide.slide_type,
-        config_json: slide.config_json,
-        speaker_notes: null,
-        estimated_seconds: null,
-      })),
+      slides: slides.map((slide, index) => {
+        const persistentImageUrl = isPersistentImageUrl(slide.media?.url)
+          ? slide.media!.url
+          : null;
+        const configJson =
+          slide.slide_type === "image_hotspot"
+            ? {
+                ...(slide.config_json as ImageHotspotConfig),
+                imageUrl: persistentImageUrl || "",
+                requiresAdminSetup: !persistentImageUrl,
+              }
+            : slide.config_json;
+
+        return {
+          title: slide.title || `Slide ${index + 1}`,
+          body: slide.body,
+          image_url: persistentImageUrl,
+          slide_type: slide.slide_type,
+          config_json: configJson,
+          speaker_notes: null,
+          estimated_seconds: null,
+        };
+      }),
       quiz_questions: selectedQuestionPayload,
     };
 
@@ -824,6 +924,8 @@ const selectedQuestion =
     setActivePreview("lesson");
   }}
   onFocusBuilder={() => setActivePreview("lesson")}
+  onUploadImage={uploadTrainingImage}
+  onImageUploadStateChange={handleImageUploadStateChange}
 />
 
           <QuizBuilder
@@ -922,7 +1024,11 @@ const selectedQuestion =
               onClick={handlePreviewClick}
               className="rounded-lg border border-blue-600 px-4 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {saveStatus === "loading" ? "Saving..." : "Preview"}
+              {isUploadingImages
+                ? "Uploading image..."
+                : saveStatus === "loading"
+                  ? "Saving..."
+                  : "Preview"}
             </button>
 
             <button
@@ -931,7 +1037,11 @@ const selectedQuestion =
               onClick={() => saveTraining("draft")}
               className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {saveStatus === "loading" ? "Saving..." : "Save Draft"}
+              {isUploadingImages
+                ? "Uploading image..."
+                : saveStatus === "loading"
+                  ? "Saving..."
+                  : "Save Draft"}
             </button>
 
             <button

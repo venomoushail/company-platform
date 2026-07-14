@@ -22,6 +22,7 @@ type RenderedSlideProps = {
   contentClassName?: string;
   emptyContentClassName?: string;
   headingClassName?: string;
+  isAdminPreview?: boolean;
 };
 
 type SlidePreviewCardProps = {
@@ -39,6 +40,7 @@ export function RenderedSlide({
   contentClassName,
   emptyContentClassName,
   headingClassName,
+  isAdminPreview,
 }: RenderedSlideProps) {
   return (
     <LearningBlockRenderer
@@ -49,6 +51,7 @@ export function RenderedSlide({
       contentClassName={contentClassName}
       emptyContentClassName={emptyContentClassName}
       headingClassName={headingClassName}
+      isAdminPreview={isAdminPreview}
     />
   );
 }
@@ -102,6 +105,7 @@ export function SlidePreviewCard({
 
       <RenderedSlide
         slide={currentSlide}
+        isAdminPreview
         titleClassName="text-2xl font-bold leading-8 text-slate-900"
         imageClassName="h-56 rounded-lg"
         imageSizes="(max-width: 768px) 100vw, 460px"

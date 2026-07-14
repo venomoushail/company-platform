@@ -14,8 +14,7 @@ import {
   getSupabaseAdminConfig,
 } from "@/lib/supabase/admin";
 import {
-  generatedTrainingDraftSchema,
-  generatedTrainingDraftV4Schema,
+  getGeneratedTrainingDraftSchema,
   normalizeGeneratedTrainingDraft,
 } from "@/lib/training/importDraft";
 
@@ -309,8 +308,7 @@ export async function POST(
   const { generationStyle, promptVersion } = await readGenerationOptions(request);
   const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
   const promptBuilder = getRestaurantTrainingPromptBuilder(promptVersion);
-  const draftSchema =
-    promptVersion === "v4" ? generatedTrainingDraftV4Schema : generatedTrainingDraftSchema;
+  const draftSchema = getGeneratedTrainingDraftSchema(promptVersion);
 
   if (response) return response;
 

@@ -1,5 +1,6 @@
 "use client";
 
+import LessonContent from "@/components/training/LessonContent";
 import type {
   LearningBlockInteractionState,
   ScenarioBlockConfig,
@@ -7,6 +8,7 @@ import type {
 
 type Props = {
   title: string;
+  body: string;
   config: ScenarioBlockConfig;
   state: LearningBlockInteractionState;
   onStateChange: (state: LearningBlockInteractionState) => void;
@@ -14,10 +16,13 @@ type Props = {
 
 export default function ScenarioBlockRenderer({
   title,
+  body,
   config,
   state,
   onStateChange,
 }: Props) {
+  const scenarioText = config.scenarioText.trim() || body.trim();
+  const supportingBody = body.trim() && body.trim() !== scenarioText ? body : "";
   const selectedAnswerId = state.selectedAnswerId ?? "";
   const submittedAnswerId = state.submittedAnswerId;
   const isSubmitted = Boolean(submittedAnswerId);
@@ -51,10 +56,22 @@ export default function ScenarioBlockRenderer({
         </h1>
       </div>
 
+      {supportingBody && (
+        <LessonContent
+          content={supportingBody}
+          className="space-y-4 text-base leading-7 text-slate-700"
+          headingClassName="text-lg font-bold leading-7 text-slate-900"
+        />
+      )}
+
       <div className="rounded-xl border border-violet-200 bg-violet-50 p-5">
-        <p className="text-base leading-7 text-slate-800">
-          {config.scenarioText || "Describe the workplace situation."}
-        </p>
+        <LessonContent
+          content={scenarioText}
+          emptyText="Describe the workplace situation."
+          className="space-y-4 text-base leading-7 text-slate-800"
+          emptyClassName="text-base leading-7 text-slate-800"
+          headingClassName="text-lg font-bold leading-7 text-slate-900"
+        />
       </div>
 
       <p className="text-lg font-semibold text-slate-900">

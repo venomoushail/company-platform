@@ -2,7 +2,7 @@
 
 import {
   Dispatch,
-  MouseEvent,
+  PointerEvent as ReactPointerEvent,
   ReactNode,
   SetStateAction,
   useEffect,
@@ -55,6 +55,7 @@ import type {
 } from "@/types/learningBlocks";
 import {
   getDefaultLearningBlockConfig,
+  isPersistentImageUrl,
   normalizeLearningBlockConfig,
   normalizeLearningBlockType,
   regenerateLearningBlockConfigIds,
@@ -76,6 +77,7 @@ export type SlideMedia = {
   alt?: string;
   fileName?: string;
   storagePath?: string;
+  isLocalPreview?: boolean;
 };
 
 type SlideBuilderProps = {
@@ -84,6 +86,11 @@ type SlideBuilderProps = {
   selectedSlideId: number;
   setSelectedSlideId: (id: number) => void;
   onFocusBuilder?: () => void;
+  onUploadImage: (file: File, slideId: number) => Promise<{
+    url: string;
+    storagePath: string;
+  }>;
+  onImageUploadStateChange?: (slideId: number, isUploading: boolean) => void;
 };
 
 type SortableSlideButtonProps = {
@@ -726,12 +733,17 @@ export default function SlideBuilder({
   selectedSlideId,
   setSelectedSlideId,
   onFocusBuilder,
+  onUploadImage,
+  onImageUploadStateChange,
 }: SlideBuilderProps) {
   const [isOutlineCollapsed, setIsOutlineCollapsed] = useState(false);
   const [isBlockMenuOpen, setIsBlockMenuOpen] = useState(false);
   const [selectedBodyColor, setSelectedBodyColor] =
     useState<BodyTextColor>("default");
   const [imageError, setImageError] = useState("");
+  const [uploadingImageSlideIds, setUploadingImageSlideIds] = useState<Set<number>>(
+    () => new Set()
+  );
   const bodyEditorRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const bodySelectionRef = useRef<Range | null>(null);
@@ -800,8 +812,8 @@ export default function SlideBuilder({
   }
 
   function updateSelectedSlideConfig(config: LearningBlockConfig) {
-    setSlides(
-      slides.map((slide) =>
+    setSlides((currentSlides) =>
+      currentSlides.map((slide) =>
         slide.id === selectedSlide.id ? { ...slide, config_json: config } : slide
       )
     );
@@ -812,8 +824,8 @@ export default function SlideBuilder({
   }
 
   function updateSlideMedia(id: number, media?: SlideMedia) {
-    setSlides(
-      slides.map((slide) => {
+    setSlides((currentSlides) =>
+      currentSlides.map((slide) => {
         if (slide.id !== id) return slide;
 
         if (slide.slide_type !== "image_hotspot") return { ...slide, media };
@@ -829,6 +841,7 @@ export default function SlideBuilder({
           config_json: {
             ...config,
             imageUrl: media?.url ?? "",
+            requiresAdminSetup: !media || media.isLocalPreview === true,
           },
         };
       })
@@ -847,7 +860,7 @@ export default function SlideBuilder({
     }
   }
 
-  function handleSlideImageChange(file: File | undefined) {
+  async function handleSlideImageChange(file: File | undefined) {
     setImageError("");
 
     if (!file) return;
@@ -876,7 +889,67 @@ export default function SlideBuilder({
       url: imageUrl,
       alt: selectedSlide.title ? `${selectedSlide.title} image` : "Lesson slide image",
       fileName: file.name,
+      isLocalPreview: true,
     });
+
+    onImageUploadStateChange?.(selectedSlide.id, true);
+    setUploadingImageSlideIds((current) => new Set(current).add(selectedSlide.id));
+
+    try {
+      const uploadedImage = await onUploadImage(file, selectedSlide.id);
+
+      setSlides((currentSlides) =>
+        currentSlides.map((slide) => {
+          if (slide.id !== selectedSlide.id) return slide;
+
+          const media: SlideMedia = {
+            type: "image",
+            url: uploadedImage.url,
+            storagePath: uploadedImage.storagePath,
+            fileName: file.name,
+            alt:
+              slide.media?.alt ||
+              (slide.title ? `${slide.title} image` : "Lesson slide image"),
+          };
+
+          if (slide.slide_type !== "image_hotspot") return { ...slide, media };
+
+          const config = normalizeLearningBlockConfig(
+            "image_hotspot",
+            slide.config_json
+          ) as ImageHotspotConfig;
+
+          return {
+            ...slide,
+            media,
+            config_json: {
+              ...config,
+              imageUrl: uploadedImage.url,
+              requiresAdminSetup: false,
+            },
+          };
+        })
+      );
+      setImageError("");
+
+      requestAnimationFrame(() => {
+        URL.revokeObjectURL(imageUrl);
+        localImageUrlsRef.current.delete(imageUrl);
+      });
+    } catch (error) {
+      setImageError(
+        error instanceof Error
+          ? error.message
+          : "Unable to upload the image. Please try again."
+      );
+    } finally {
+      onImageUploadStateChange?.(selectedSlide.id, false);
+      setUploadingImageSlideIds((current) => {
+        const next = new Set(current);
+        next.delete(selectedSlide.id);
+        return next;
+      });
+    }
 
     if (
       previousUrl &&
@@ -1045,16 +1118,26 @@ export default function SlideBuilder({
     const slideToCopy = slides.find((slide) => slide.id === id);
     if (!slideToCopy) return;
 
+    const hasPersistentImage = isPersistentImageUrl(slideToCopy.media?.url);
+    const copiedConfig = regenerateLearningBlockConfigIds(
+      slideToCopy.slide_type,
+      slideToCopy.config_json
+    );
     const copiedSlide: Slide = {
       ...slideToCopy,
       id: Math.max(0, ...slides.map((slide) => slide.id)) + 1,
       title: slideToCopy.title
         ? `${slideToCopy.title} Copy`
         : "Untitled Slide Copy",
-      config_json: regenerateLearningBlockConfigIds(
-        slideToCopy.slide_type,
-        slideToCopy.config_json
-      ),
+      config_json:
+        slideToCopy.slide_type === "image_hotspot" && !hasPersistentImage
+          ? {
+              ...(copiedConfig as ImageHotspotConfig),
+              imageUrl: "",
+              requiresAdminSetup: true,
+            }
+          : copiedConfig,
+      media: hasPersistentImage ? slideToCopy.media : undefined,
       isComplete: false,
     };
 
@@ -1290,7 +1373,7 @@ export default function SlideBuilder({
             </div>
           </div>
 
-          <div className="space-y-5">
+          <div className="flex flex-col gap-5">
             <div>
               <label className="block text-sm font-semibold text-slate-700">
                 Slide Title
@@ -1368,29 +1451,33 @@ export default function SlideBuilder({
               />
             </div>
 
-            <LearningBlockConfigEditor
-              slide={selectedSlide}
-              onChange={updateSelectedSlideConfig}
-            />
+            <div className={selectedSlide.slide_type === "image_hotspot" ? "order-4" : ""}>
+              <LearningBlockConfigEditor
+                slide={selectedSlide}
+                onChange={updateSelectedSlideConfig}
+              />
+            </div>
 
-            <div>
-              <label className="block text-sm font-semibold text-slate-700">
-                Slide Image
-              </label>
+            <div className={selectedSlide.slide_type === "image_hotspot" ? "order-3" : ""}>
+                <label className="block text-sm font-semibold text-slate-700">
+                {selectedSlide.slide_type === "image_hotspot" ? "Image Setup" : "Slide Image"}
+                </label>
 
               <div className="mt-2 rounded-lg border border-slate-300 bg-slate-50 p-4">
                 {selectedSlide.media?.type === "image" ? (
                   <div className="space-y-3">
-                    <div className="relative h-72 overflow-hidden rounded-lg border border-slate-200 bg-white">
-                      <Image
-                        src={selectedSlide.media.url}
-                        alt={selectedSlide.media.alt || ""}
-                        fill
-                        sizes="(max-width: 768px) 100vw, 680px"
-                        unoptimized
-                        className="object-contain"
-                      />
-                    </div>
+                    {selectedSlide.slide_type !== "image_hotspot" && (
+                      <div className="relative h-72 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                        <Image
+                          src={selectedSlide.media.url}
+                          alt={selectedSlide.media.alt || ""}
+                          fill
+                          sizes="(max-width: 768px) 100vw, 680px"
+                          unoptimized
+                          className="object-contain"
+                        />
+                      </div>
+                    )}
 
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -1398,7 +1485,11 @@ export default function SlideBuilder({
                           {selectedSlide.media.fileName || "Slide image"}
                         </p>
                         <p className="text-xs text-slate-500">
-                          JPG, PNG, or WebP. Max 5MB.
+                          {uploadingImageSlideIds.has(selectedSlide.id)
+                            ? "Uploading image..."
+                            : selectedSlide.media.isLocalPreview
+                              ? "Upload failed. Select the image again to retry."
+                              : "Uploaded permanently"}
                         </p>
                       </div>
 
@@ -1406,6 +1497,7 @@ export default function SlideBuilder({
                         <button
                           type="button"
                           onClick={() => imageInputRef.current?.click()}
+                          disabled={uploadingImageSlideIds.has(selectedSlide.id)}
                           className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
                         >
                           Replace
@@ -1414,22 +1506,52 @@ export default function SlideBuilder({
                         <button
                           type="button"
                           onClick={removeSlideImage}
+                          disabled={uploadingImageSlideIds.has(selectedSlide.id)}
                           className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"
                         >
                           Remove
                         </button>
                       </div>
                     </div>
+
+                    {selectedSlide.slide_type === "image_hotspot" && (
+                      <label className="block">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Alt text <span className="font-normal text-slate-400">(optional)</span>
+                        </span>
+                        <input
+                          type="text"
+                          value={selectedSlide.media.alt || ""}
+                          onChange={(event) =>
+                            updateSlideMedia(selectedSlide.id, {
+                              ...selectedSlide.media!,
+                              alt: event.target.value,
+                            })
+                          }
+                          placeholder="Describe the image for learners using assistive technology"
+                          className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+                        />
+                      </label>
+                    )}
                   </div>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => imageInputRef.current?.click()}
-                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-white px-4 py-8 text-sm font-semibold text-slate-600 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
-                  >
-                    <ImageIcon size={18} strokeWidth={2.2} />
-                    Upload slide image
-                  </button>
+                  <div>
+                    {selectedSlide.slide_type === "image_hotspot" &&
+                      (selectedSlide.config_json as ImageHotspotConfig)
+                        .requiresAdminSetup && (
+                        <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
+                          This image was not uploaded permanently. Please select the image again.
+                        </p>
+                      )}
+                    <button
+                      type="button"
+                      onClick={() => imageInputRef.current?.click()}
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-white px-4 py-8 text-sm font-semibold text-slate-600 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                    >
+                      <ImageIcon size={18} strokeWidth={2.2} />
+                      Upload slide image
+                    </button>
+                  </div>
                 )}
 
                 <input
@@ -1449,8 +1571,7 @@ export default function SlideBuilder({
                 )}
 
                 <p className="mt-3 text-xs text-slate-500">
-                  Storage upload is ready to connect once the Supabase image
-                  bucket and policies are configured.
+                  JPG, PNG, or WebP. Maximum file size 5MB.
                 </p>
               </div>
             </div>
@@ -1458,6 +1579,360 @@ export default function SlideBuilder({
         </section>
       </div>
     </div>
+  );
+}
+
+function ImageHotspotConfigEditor({
+  slide,
+  config,
+  onChange,
+}: {
+  slide: Slide;
+  config: ImageHotspotConfig;
+  onChange: (config: LearningBlockConfig) => void;
+}) {
+  const [selectedHotspotId, setSelectedHotspotId] = useState("");
+  const [isAdding, setIsAdding] = useState(config.hotspots.length === 0);
+  const [imageAspectRatio, setImageAspectRatio] = useState(16 / 9);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const dragRef = useRef<{ hotspotId: string; pointerId: number } | null>(null);
+  const selectedIndex = config.hotspots.findIndex(
+    (hotspot) => hotspot.id === selectedHotspotId
+  );
+  const selectedHotspot = config.hotspots[selectedIndex];
+
+  function updateHotspot(
+    hotspotId: string,
+    patch: Partial<ImageHotspotConfig["hotspots"][number]>
+  ) {
+    onChange({
+      ...config,
+      hotspots: config.hotspots.map((hotspot) =>
+        hotspot.id === hotspotId ? { ...hotspot, ...patch } : hotspot
+      ),
+    });
+  }
+
+  function removeHotspot(hotspotId: string) {
+    onChange({
+      ...config,
+      hotspots: config.hotspots.filter((hotspot) => hotspot.id !== hotspotId),
+    });
+    setSelectedHotspotId("");
+  }
+
+  function percentFromPointer(event: ReactPointerEvent) {
+    const bounds = canvasRef.current?.getBoundingClientRect();
+    if (!bounds) return null;
+
+    return {
+      xPercent: Math.round(
+        Math.min(100, Math.max(0, ((event.clientX - bounds.left) / bounds.width) * 100)) *
+          10
+      ) / 10,
+      yPercent: Math.round(
+        Math.min(100, Math.max(0, ((event.clientY - bounds.top) / bounds.height) * 100)) *
+          10
+      ) / 10,
+    };
+  }
+
+  function addHotspot(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!config.imageUrl || !isAdding || event.button !== 0) return;
+    const position = percentFromPointer(event);
+    if (!position) return;
+    const hotspotId = nextItemId(
+      "hotspot",
+      config.hotspots.map((hotspot) => hotspot.id)
+    );
+
+    onChange({
+      ...config,
+      hotspots: [
+        ...config.hotspots,
+        {
+          id: hotspotId,
+          ...position,
+          title: `Hotspot ${config.hotspots.length + 1}`,
+          description: "",
+          isRequired: true,
+        },
+      ],
+    });
+    setSelectedHotspotId(hotspotId);
+    setIsAdding(false);
+    requestAnimationFrame(() => titleInputRef.current?.focus());
+  }
+
+  function startDragging(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    hotspotId: string
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedHotspotId(hotspotId);
+    dragRef.current = { hotspotId, pointerId: event.pointerId };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function dragHotspot(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const position = percentFromPointer(event);
+    if (position) updateHotspot(drag.hotspotId, position);
+  }
+
+  function stopDragging(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragRef.current = null;
+  }
+
+  return (
+    <ConfigShell title="Image Hotspot">
+      <TextField
+        label="Instruction"
+        value={config.instruction}
+        onChange={(instruction) => onChange({ ...config, instruction })}
+      />
+      <ToggleField
+        label="Require all required hotspots before continuing"
+        checked={config.requireAllHotspots !== false}
+        onChange={(requireAllHotspots) =>
+          onChange({ ...config, requireAllHotspots })
+        }
+      />
+
+      <section aria-labelledby="hotspot-editor-heading">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h5 id="hotspot-editor-heading" className="text-sm font-bold text-slate-900">
+              Hotspot Editor
+            </h5>
+            <p className="mt-1 text-xs text-slate-500">
+              Add a marker, then drag it anywhere on the image.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setIsAdding((current) => !current)}
+              disabled={!config.imageUrl}
+              aria-pressed={isAdding}
+              className={`rounded-lg border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                isAdding
+                  ? "border-blue-600 bg-blue-600 text-white"
+                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              {isAdding ? "Click image to place" : "Add Hotspot"}
+            </button>
+            <button
+              type="button"
+              onClick={() => selectedHotspot && removeHotspot(selectedHotspot.id)}
+              disabled={!selectedHotspot}
+              className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Delete Selected
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-xl border border-slate-200 bg-slate-100 p-2 sm:p-4">
+          {config.imageUrl ? (
+            <div
+              ref={canvasRef}
+              onPointerDown={addHotspot}
+              className={`relative mx-auto w-full max-w-5xl touch-none overflow-hidden rounded-lg bg-white shadow-sm select-none ${
+                isAdding ? "cursor-crosshair ring-2 ring-blue-400 ring-offset-2" : "cursor-default"
+              }`}
+              style={{ aspectRatio: imageAspectRatio }}
+              aria-label="Hotspot image canvas"
+            >
+              <Image
+                src={config.imageUrl}
+                alt={slide.media?.alt || slide.title || "Hotspot image"}
+                fill
+                sizes="(max-width: 1024px) 100vw, 1024px"
+                unoptimized
+                draggable={false}
+                onLoad={(event) => {
+                  const image = event.currentTarget;
+                  if (image.naturalWidth && image.naturalHeight) {
+                    setImageAspectRatio(image.naturalWidth / image.naturalHeight);
+                  }
+                }}
+                className="pointer-events-none object-contain"
+              />
+
+              {config.hotspots.length === 0 && (
+                <div className="pointer-events-none absolute inset-x-4 top-1/2 z-10 -translate-y-1/2 rounded-lg bg-slate-950/75 px-4 py-3 text-center text-sm font-semibold text-white shadow-lg sm:left-1/2 sm:right-auto sm:w-max sm:max-w-[calc(100%-2rem)] sm:-translate-x-1/2">
+                  Click anywhere on the image to add your first hotspot.
+                </div>
+              )}
+
+              {config.hotspots.map((hotspot, index) => {
+                const isSelected = hotspot.id === selectedHotspotId;
+                const label = hotspot.title.trim() || "Untitled hotspot";
+
+                return (
+                  <button
+                    key={hotspot.id}
+                    type="button"
+                    onPointerDown={(event) => startDragging(event, hotspot.id)}
+                    onPointerMove={dragHotspot}
+                    onPointerUp={stopDragging}
+                    onPointerCancel={stopDragging}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSelectedHotspotId(hotspot.id);
+                    }}
+                    className={`group absolute z-20 flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 touch-none items-center justify-center rounded-full border-2 border-white bg-orange-600 text-sm font-bold text-white shadow-[0_2px_8px_rgba(15,23,42,0.65)] transition hover:scale-110 focus:outline-none focus:ring-4 focus:ring-blue-300 active:cursor-grabbing ${
+                      isSelected ? "scale-110 ring-4 ring-blue-400" : ""
+                    }`}
+                    style={{ left: `${hotspot.xPercent}%`, top: `${hotspot.yPercent}%` }}
+                    aria-label={`Hotspot ${index + 1}: ${label}${
+                      hotspot.isRequired !== false ? ", required" : ""
+                    }. Drag to reposition.`}
+                    title={`${label} — drag to reposition`}
+                  >
+                    {index + 1}
+                    {hotspot.isRequired !== false && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute -right-1.5 -top-2 flex h-4 min-w-4 items-center justify-center rounded-full border border-white bg-slate-900 px-1 text-[10px] leading-none text-white"
+                      >
+                        *
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex min-h-56 items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white px-5 text-center text-sm font-semibold text-slate-500">
+              Upload an image in Image Setup to begin adding hotspots.
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-slate-200 bg-white p-4" aria-live="polite">
+        {selectedHotspot ? (
+          <>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-slate-900">
+                  Editing Hotspot {selectedIndex + 1}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">Changes appear in the preview immediately.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => removeHotspot(selectedHotspot.id)}
+                className="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"
+              >
+                Delete marker
+              </button>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="block">
+                <span className="text-sm font-semibold text-slate-700">Marker title</span>
+                <input
+                  ref={titleInputRef}
+                  type="text"
+                  value={selectedHotspot.title}
+                  onChange={(event) =>
+                    updateHotspot(selectedHotspot.id, { title: event.target.value })
+                  }
+                  placeholder={`Hotspot ${selectedIndex + 1}`}
+                  className="mt-2 w-full rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-blue-600"
+                />
+              </label>
+              <ToggleField
+                label="Required"
+                checked={selectedHotspot.isRequired !== false}
+                onChange={(isRequired) => updateHotspot(selectedHotspot.id, { isRequired })}
+              />
+            </div>
+            <div className="mt-4">
+              <TextAreaField
+                label="Description"
+                value={selectedHotspot.description}
+                onChange={(description) => updateHotspot(selectedHotspot.id, { description })}
+              />
+            </div>
+            <details className="mt-3 text-xs text-slate-500">
+              <summary className="cursor-pointer font-semibold">Position details</summary>
+              <p className="mt-2">
+                Horizontal {selectedHotspot.xPercent.toFixed(1)}% · Vertical{" "}
+                {selectedHotspot.yPercent.toFixed(1)}%
+              </p>
+            </details>
+          </>
+        ) : (
+          <p className="text-sm font-semibold text-slate-500">
+            Select a marker or click the image to add one.
+          </p>
+        )}
+      </section>
+
+      <section aria-labelledby="hotspot-list-heading">
+        <div className="flex items-center justify-between gap-3">
+          <h5 id="hotspot-list-heading" className="text-sm font-bold text-slate-900">
+            Hotspot List
+          </h5>
+          <span className="text-xs font-semibold text-slate-500">
+            {config.hotspots.length} {config.hotspots.length === 1 ? "marker" : "markers"}
+          </span>
+        </div>
+        {config.hotspots.length > 0 ? (
+          <div className="mt-2 overflow-hidden rounded-lg border border-slate-200 bg-white">
+            {config.hotspots.map((hotspot, index) => (
+              <div
+                key={hotspot.id}
+                className={`flex items-center gap-3 border-b border-slate-200 p-2 last:border-b-0 ${
+                  hotspot.id === selectedHotspotId ? "bg-blue-50" : "hover:bg-slate-50"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setSelectedHotspotId(hotspot.id)}
+                  className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-2 py-1.5 text-left focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  aria-pressed={hotspot.id === selectedHotspotId}
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-orange-600 text-xs font-bold text-white">
+                    {index + 1}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-800">
+                    {hotspot.title.trim() || `Untitled hotspot ${index + 1}`}
+                  </span>
+                  <span className="shrink-0 text-xs font-semibold text-slate-500">
+                    {hotspot.isRequired !== false ? "Required" : "Optional"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeHotspot(hotspot.id)}
+                  className="rounded-md px-2 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"
+                  aria-label={`Delete hotspot ${index + 1}`}
+                >
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-2 rounded-lg border border-dashed border-slate-300 bg-white px-4 py-5 text-center text-sm text-slate-500">
+            Your markers will appear here.
+          </p>
+        )}
+      </section>
+    </ConfigShell>
   );
 }
 
@@ -1799,140 +2274,7 @@ function LearningBlockConfigEditor({
       { imageUrl: slide.media?.url }
     ) as ImageHotspotConfig;
 
-    function addHotspot(event: MouseEvent<HTMLDivElement>) {
-      if (!config.imageUrl) return;
-      const bounds = event.currentTarget.getBoundingClientRect();
-      const xPercent = ((event.clientX - bounds.left) / bounds.width) * 100;
-      const yPercent = ((event.clientY - bounds.top) / bounds.height) * 100;
-
-      onChange({
-        ...config,
-        hotspots: [
-          ...config.hotspots,
-          {
-            id: nextItemId("hotspot", config.hotspots.map((hotspot) => hotspot.id)),
-            xPercent: Math.round(xPercent * 10) / 10,
-            yPercent: Math.round(yPercent * 10) / 10,
-            title: "",
-            description: "",
-            isRequired: true,
-          },
-        ],
-      });
-    }
-
-    function updateHotspot(
-      hotspotId: string,
-      patch: Partial<ImageHotspotConfig["hotspots"][number]>
-    ) {
-      onChange({
-        ...config,
-        hotspots: config.hotspots.map((hotspot) =>
-          hotspot.id === hotspotId ? { ...hotspot, ...patch } : hotspot
-        ),
-      });
-    }
-
-    return (
-      <ConfigShell title="Image Hotspot">
-        <TextField
-          label="Instruction"
-          value={config.instruction}
-          onChange={(instruction) => onChange({ ...config, instruction })}
-        />
-        <ToggleField
-          label="Require all required hotspots before continuing"
-          checked={config.requireAllHotspots !== false}
-          onChange={(requireAllHotspots) =>
-            onChange({ ...config, requireAllHotspots })
-          }
-        />
-        <div>
-          <p className="text-sm font-semibold text-slate-700">
-            Hotspot canvas
-          </p>
-          <div
-            role="button"
-            tabIndex={0}
-            onClick={addHotspot}
-            className="relative mt-2 min-h-64 overflow-hidden rounded-lg border border-dashed border-slate-300 bg-white"
-            title="Click the image to add a hotspot"
-          >
-            {config.imageUrl ? (
-              <Image
-                src={config.imageUrl}
-                alt={slide.title || "Hotspot image"}
-                fill
-                sizes="(max-width: 768px) 100vw, 680px"
-                unoptimized
-                className="object-contain"
-              />
-            ) : (
-              <div className="flex min-h-64 items-center justify-center px-4 text-center text-sm font-semibold text-slate-500">
-                Upload a slide image below, then click the image to add hotspots.
-              </div>
-            )}
-            {config.hotspots.map((hotspot, index) => (
-              <span
-                key={hotspot.id}
-                className="absolute flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-white bg-orange-600 text-sm font-bold text-white shadow"
-                style={{ left: `${hotspot.xPercent}%`, top: `${hotspot.yPercent}%` }}
-              >
-                {index + 1}
-              </span>
-            ))}
-          </div>
-        </div>
-        <div className="space-y-3">
-          {config.hotspots.map((hotspot, index) => (
-            <div key={hotspot.id} className="rounded-lg border border-slate-200 bg-white p-3">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <p className="text-sm font-bold text-slate-900">
-                  Hotspot {index + 1}
-                </p>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onChange({
-                      ...config,
-                      hotspots: config.hotspots.filter(
-                        (currentHotspot) => currentHotspot.id !== hotspot.id
-                      ),
-                    })
-                  }
-                  className="rounded-lg border border-red-200 px-2 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"
-                >
-                  Delete
-                </button>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <TextField
-                  label="Title"
-                  value={hotspot.title}
-                  onChange={(title) => updateHotspot(hotspot.id, { title })}
-                />
-                <ToggleField
-                  label="Required"
-                  checked={hotspot.isRequired !== false}
-                  onChange={(isRequired) =>
-                    updateHotspot(hotspot.id, { isRequired })
-                  }
-                />
-              </div>
-              <div className="mt-3">
-                <TextAreaField
-                  label="Description"
-                  value={hotspot.description}
-                  onChange={(description) =>
-                    updateHotspot(hotspot.id, { description })
-                  }
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      </ConfigShell>
-    );
+    return <ImageHotspotConfigEditor slide={slide} config={config} onChange={onChange} />;
   }
 
   const config = normalizeLearningBlockConfig(type, slide.config_json);

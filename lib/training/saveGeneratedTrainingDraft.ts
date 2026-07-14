@@ -1,9 +1,12 @@
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import type { GeneratedTrainingDraft } from "@/lib/training/importDraft";
+import { normalizeCategorySlug } from "@/lib/training/formatCategoryLabel";
 import type {
   KnowledgeCheckConfig,
+  LearningBlockType,
   ScenarioBlockConfig,
 } from "@/types/learningBlocks";
+import { normalizeLearningBlockConfig } from "@/types/learningBlocks";
 
 function buildSlideBody(slide: GeneratedTrainingDraft["slides"][number]) {
   if (slide.slide_type === "knowledge_check" || slide.slide_type === "scenario") {
@@ -122,7 +125,7 @@ export async function saveGeneratedTrainingDraft({
     .insert({
       title: draft.module.title,
       description: draft.module.description || null,
-      category: draft.module.category || null,
+      category: normalizeCategorySlug(draft.module.category) || null,
       training_audience: "all",
       passing_score: draft.module.passing_score,
       estimated_minutes: draft.module.estimated_minutes,
@@ -153,7 +156,11 @@ export async function saveGeneratedTrainingDraft({
       body: buildSlideBody(slide),
       image_url: null,
       slide_type: slide.slide_type,
-      config_json: buildSlideConfig(slide),
+      config_json: normalizeLearningBlockConfig(
+        slide.slide_type as LearningBlockType,
+        buildSlideConfig(slide),
+        { title: slide.title, body: slide.body }
+      ),
       speaker_notes: slide.coach_note || null,
       estimated_seconds: null,
       is_active: true,

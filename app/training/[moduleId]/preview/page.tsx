@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import AdminLayout from "@/components/layout/AdminLayout";
 import TrainingViewer from "@/components/training/LessonViewer";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { formatCategoryLabel } from "@/lib/training/formatCategoryLabel";
 import type {
   Position,
   QuizQuestionRow,
@@ -126,7 +127,7 @@ export default function TrainingModulePreviewPage() {
         <div>
           <p className="text-sm font-semibold text-slate-500">
             {trainingDetail
-              ? `${viewerSlides.length} learning blocks, ${trainingDetail.quiz_questions.length} quiz questions`
+              ? `${formatCategoryLabel(trainingDetail.module.category)} · ${viewerSlides.length} learning blocks, ${trainingDetail.quiz_questions.length} quiz questions`
               : "Loading training preview"}
           </p>
         </div>

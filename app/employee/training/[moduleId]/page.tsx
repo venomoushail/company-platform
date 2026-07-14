@@ -6,6 +6,7 @@ import { useParams, useRouter } from "next/navigation";
 import EmployeeLayout from "@/components/layout/EmployeeLayout";
 import TrainingViewer from "@/components/training/LessonViewer";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
+import { formatCategoryLabel } from "@/lib/training/formatCategoryLabel";
 import type {
   Company,
   Profile,
@@ -131,6 +132,7 @@ export default function EmployeeTrainingPage() {
     {}
   );
   const [quizResult, setQuizResult] = useState<QuizResult | null>(null);
+  const [quizStartedAt, setQuizStartedAt] = useState<string | null>(null);
   const [pageStatus, setPageStatus] = useState<PageStatus>("loading");
   const [pageError, setPageError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
@@ -192,12 +194,11 @@ export default function EmployeeTrainingPage() {
       setSlides(trainingData.slides);
       setQuestions(trainingData.quiz_questions);
       setTrainingStatus(trainingData.status);
-      setViewMode(
+      const startsInQuiz =
         trainingData.status.status === "lesson_complete_quiz_required" ||
-          trainingData.status.status === "failed_retake_available"
-          ? "quiz"
-          : "lesson"
-      );
+        trainingData.status.status === "failed_retake_available";
+      setViewMode(startsInQuiz ? "quiz" : "lesson");
+      setQuizStartedAt(startsInQuiz ? new Date().toISOString() : null);
       setPageStatus("success");
     }
 
@@ -282,6 +283,7 @@ export default function EmployeeTrainingPage() {
       if (actionData.status) setTrainingStatus(actionData.status);
       if (questions.length > 0 || actionData.has_quiz) {
         setViewMode("quiz");
+        setQuizStartedAt(new Date().toISOString());
         setActionMessage("Lesson complete. Start the quiz when ready.");
       } else {
         setViewMode("result");
@@ -318,6 +320,7 @@ export default function EmployeeTrainingPage() {
           action: "submit_quiz",
           module_id: trainingModule.id,
           answers: selectedAnswers,
+          quiz_started_at: quizStartedAt,
         }),
       });
       const data = (await response.json().catch(() => null)) as
@@ -345,6 +348,7 @@ export default function EmployeeTrainingPage() {
     setSelectedAnswers({});
     setQuizResult(null);
     setViewMode("quiz");
+    setQuizStartedAt(new Date().toISOString());
     setActionMessage("Retake the quiz when ready.");
   }
 
@@ -365,7 +369,8 @@ export default function EmployeeTrainingPage() {
 
         {trainingModule && (
           <p className="text-sm font-medium text-slate-500">
-            Passing score: {trainingModule.passing_score}%
+            {formatCategoryLabel(trainingModule.category)} · Passing score:{" "}
+            {trainingModule.passing_score}%
           </p>
         )}
       </div>
